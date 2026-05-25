@@ -10,8 +10,10 @@ import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JList;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -25,6 +27,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -95,29 +98,37 @@ public class ImageUpscalePanel extends JPanel {
     private AtomicBoolean cancellationFlag;
     private static final Pattern PASS_PATTERN = Pattern.compile("pass\\s+(\\d+)/(\\d+)", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * Constructs the image upscale panel with all controls, drag-and-drop support,
+     * and layout.
+     *
+     * @param models              list of available model descriptors for the model combo box
+     * @param modelDownloader     handles downloading models from remote sources
+     * @param inferenceService    handles running the ONNX upscale pipeline
+     */
     public ImageUpscalePanel(List<ModelDescriptor> models,
-                             ModelDownloader modelDownloader,
-                             InferenceService inferenceService) {
+                              ModelDownloader modelDownloader,
+                              InferenceService inferenceService) {
         super(new BorderLayout(0, 0));
         this.modelDownloader = modelDownloader;
         this.inferenceService = inferenceService;
 
         /* ---- init ---- */
         modelCombo = new JComboBox<>(models.toArray(new ModelDescriptor[0]));
-        modelCombo.setRenderer((list, value, idx, sel, focus) -> {
-            JLabel lbl = new JLabel(value == null ? "" : value.displayName());
-            lbl.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-            if (sel) {
-                lbl.setBackground(list.getSelectionBackground());
-                lbl.setForeground(list.getSelectionForeground());
-                lbl.setOpaque(true);
+        modelCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value,
+                                                           int index, boolean isSelected,
+                                                           boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "" : ((ModelDescriptor) value).displayName());
+                setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+                return this;
             }
-            return lbl;
         });
 
         inputFileLabel = new JLabel("No file selected");
         inputFileLabel.setFont(inputFileLabel.getFont().deriveFont(Font.PLAIN, 12f));
-        inputFileLabel.setForeground(new Color(130, 130, 130));
         browseButton = new JButton("Choose Image\u2026");
 
         outputResolutionBox = new JComboBox<>(new String[]{
@@ -144,10 +155,9 @@ public class ImageUpscalePanel extends JPanel {
 
         statusLabel = new JLabel("Ready");
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        statusLabel.setForeground(new Color(120, 120, 120));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 20, 8, 20));
 
-        runButton = new JButton("Upscale");
+        runButton = new JButton("Enhance");
         cancelButton = new JButton("Cancel");
         cancelButton.setEnabled(false);
         cancelButton.setToolTipText("Cancel the current upscale operation");
@@ -197,7 +207,7 @@ public class ImageUpscalePanel extends JPanel {
         browseButton.setToolTipText("Select an image file to upscale");
         outputResolutionBox.setToolTipText("Target output resolution");
         resizeMethodBox.setToolTipText("Method used for resizing (ESRGAN Multi-Pass recommended)");
-        runButton.setToolTipText("Upscale image (\u2318Enter)");
+        runButton.setToolTipText("Enhance (\u2318Enter)");
         saveButton.setToolTipText("Save upscaled image (\u2318S)");
 
         if (models.isEmpty()) {
@@ -212,6 +222,11 @@ public class ImageUpscalePanel extends JPanel {
     /*  Layout                                                             */
     /* ================================================================== */
 
+    /**
+     * Builds the full panel layout: model selector, file chooser, resolution
+     * and method controls, action buttons, progress bar, and a tabbed area
+     * with before/after preview and log.
+     */
     private void buildLayout() {
         JPanel top = new JPanel();
         top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
@@ -318,11 +333,18 @@ public class ImageUpscalePanel extends JPanel {
         }, true);
     }
 
+    /**
+     * Creates a titled panel containing a scrollable image label, used for
+     * the before and after preview columns.
+     *
+     * @param title the panel header text (e.g. "Before" or "After")
+     * @param label the image label to display the preview in
+     * @return a bordered panel wrapping the label
+     */
     private static JPanel borderedPreview(String title, JLabel label) {
         JPanel p = new JPanel(new BorderLayout(0, 4));
         JLabel t = new JLabel(title, JLabel.CENTER);
         t.setFont(t.getFont().deriveFont(Font.PLAIN, 11f));
-        t.setForeground(new Color(130, 130, 130));
         p.add(t, BorderLayout.NORTH);
         p.add(new JScrollPane(label), BorderLayout.CENTER);
         return p;
@@ -332,9 +354,12 @@ public class ImageUpscalePanel extends JPanel {
     /*  Browse input                                                       */
     /* ================================================================== */
 
+    /**
+     * Opens a file chooser dialog to select an input image for upscaling.
+     */
     private void browseInput() {
         JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Select Image to Upscale");
+        chooser.setDialogTitle("Select Image to Enhance");
         chooser.setFileFilter(new FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File f = chooser.getSelectedFile();
@@ -343,6 +368,11 @@ public class ImageUpscalePanel extends JPanel {
         }
     }
 
+    /**
+     * Loads and displays a thumbnail of the input image in the "before" preview area.
+     *
+     * @param file the selected input image file
+     */
     private void showBeforePreview(File file) {
         try {
             BufferedImage img = ImageIO.read(file);
@@ -359,6 +389,13 @@ public class ImageUpscalePanel extends JPanel {
         }
     }
 
+    /**
+     * Returns the target output dimensions based on the selected resolution preset.
+     * "Auto (4x)" returns {0, 0} to signal auto-scaling. "Custom" reads from the
+     * custom width and height text fields.
+     *
+     * @return an int array of [width, height]
+     */
     private int[] resolveOutputDimensions() {
         String selected = String.valueOf(outputResolutionBox.getSelectedItem());
         return switch (selected) {
@@ -373,6 +410,14 @@ public class ImageUpscalePanel extends JPanel {
         };
     }
 
+    /**
+     * Safely parses an integer from a string, returning a fallback value
+     * if the string is not a valid number.
+     *
+     * @param t  the string to parse
+     * @param fb the fallback value
+     * @return the parsed integer, or fb on failure
+     */
     private static int parseInt(String t, int fb) {
         try { return Integer.parseInt(t.trim()); } catch (Exception e) { return fb; }
     }
@@ -381,6 +426,10 @@ public class ImageUpscalePanel extends JPanel {
     /*  Inference                                                          */
     /* ================================================================== */
 
+    /**
+     * Starts the upscale pipeline: validates input, downloads the model if needed,
+     * runs ONNX inference, and displays the result in the "after" preview area.
+     */
     private void runInference() {
         ModelDescriptor model = (ModelDescriptor) modelCombo.getSelectedItem();
         if (model == null) {
@@ -452,11 +501,19 @@ public class ImageUpscalePanel extends JPanel {
         }));
     }
 
+    /**
+     * Updates the UI to reflect a running or idle state.
+     * When busy, the progress bar tracks multi-pass progress if the message contains
+     * a "pass current/total" pattern.
+     *
+     * @param busy    true to show progress state, false to restore idle state
+     * @param message status text to display (e.g. "Preparing...", "Upscaling...")
+     */
     private void setRunning(boolean busy, String message) {
         running = busy;
         runButton.setEnabled(!busy);
         cancelButton.setEnabled(busy);
-        runButton.setText(busy ? message : "Upscale");
+        runButton.setText(busy ? message : "Enhance");
         statusLabel.setText(message);
         progressBar.setVisible(busy);
         if (busy) {
@@ -473,6 +530,9 @@ public class ImageUpscalePanel extends JPanel {
         }
     }
 
+    /**
+     * Signals the inference thread to cancel by setting the cancellation flag.
+     */
     private void cancelInference() {
         if (cancellationFlag != null) {
             cancellationFlag.set(true);
@@ -481,6 +541,12 @@ public class ImageUpscalePanel extends JPanel {
         statusLabel.setText("Cancelling\u2026");
     }
 
+    /**
+     * Processes the inference result: logs details, enables the save button if
+     * successful, and renders the "after" preview thumbnail.
+     *
+     * @param result the outcome of the upscale call
+     */
     private void renderResult(InferenceResult result) {
         if (result.success()) {
             appendLog(result.details() + "\n" + result.output());
@@ -494,6 +560,11 @@ public class ImageUpscalePanel extends JPanel {
         }
     }
 
+    /**
+     * Loads and displays a thumbnail of the upscaled result in the "after" preview area.
+     *
+     * @param path file path to the upscaled output image
+     */
     private void showAfterPreview(String path) {
         try {
             Image img = ImageIO.read(Path.of(path).toFile());
@@ -511,6 +582,10 @@ public class ImageUpscalePanel extends JPanel {
     /*  Save                                                               */
     /* ================================================================== */
 
+    /**
+     * Opens a file-save dialog to let the user export the upscaled image
+     * to a location of their choice. Defaults to PNG format.
+     */
     private void saveOutput() {
         if (lastArtifactPath == null || lastArtifactPath.isBlank()) { return; }
         JFileChooser chooser = new JFileChooser();
@@ -535,14 +610,32 @@ public class ImageUpscalePanel extends JPanel {
     /*  GPU (injected from MainFrame menu)                                 */
     /* ================================================================== */
 
+    /**
+     * Injects a supplier that tells the panel whether GPU acceleration is
+     * enabled. Called from the main menu bar's "Use GPU" toggle.
+     *
+     * @param supplier returns true if GPU should be used
+     */
     public void setGpuSupplier(BooleanSupplier supplier) {
         this.gpuSupplier = supplier;
     }
 
+    /**
+     * Sets the model storage backend, used to filter the model combo to
+     * only show locally available models.
+     *
+     * @param storage the model storage instance
+     */
     public void setModelStorage(ModelStorage storage) {
         this.modelStorage = storage;
     }
 
+    /**
+     * Registers a callback that opens the Model Manager panel. Invoked when
+     * the user tries to upscale but no models are available.
+     *
+     * @param callback the runnable to switch to the Model Manager card
+     */
     public void setOpenModelManager(Runnable callback) {
         this.openModelManager = callback;
     }
@@ -551,6 +644,12 @@ public class ImageUpscalePanel extends JPanel {
     /*  Model updates                                                      */
     /* ================================================================== */
 
+    /**
+     * Replaces the model combo box contents with a new list of descriptors.
+     * Only models that are locally available (according to modelStorage) are shown.
+     *
+     * @param models the complete list of model descriptors for this task type
+     */
     public void updateModels(List<ModelDescriptor> models) {
         List<ModelDescriptor> available = models;
         if (modelStorage != null) {
@@ -574,6 +673,10 @@ public class ImageUpscalePanel extends JPanel {
     /*  Logs                                                               */
     /* ================================================================== */
 
+    /**
+     * Opens the logs directory (~/.jforge-models/outputs/logs) in the
+     * desktop file manager.
+     */
     public void openLogsFolder() {
         try {
             Path logDir = Path.of(System.getProperty("user.home"),
@@ -589,6 +692,11 @@ public class ImageUpscalePanel extends JPanel {
     /*  Helpers                                                            */
     /* ================================================================== */
 
+    /**
+     * Appends a line to the log text pane shown in the Log tab.
+     *
+     * @param text the message to log
+     */
     private void appendLog(String text) {
         try {
             var doc = logArea.getStyledDocument();
@@ -596,6 +704,12 @@ public class ImageUpscalePanel extends JPanel {
         } catch (Exception ignored) { }
     }
 
+    /**
+     * Creates a small-format label used as a field header throughout the UI.
+     *
+     * @param text the label text
+     * @return a JLabel styled as a tiny header (11pt plain)
+     */
     private static JLabel tinyLabel(String text) {
         JLabel lbl = new JLabel(text);
         lbl.setFont(lbl.getFont().deriveFont(Font.PLAIN, 11f));
@@ -604,10 +718,26 @@ public class ImageUpscalePanel extends JPanel {
         return lbl;
     }
 
+    /**
+     * Constrains a panel's maximum height so it does not grow vertically
+     * beyond the given value when placed in a BoxLayout.
+     *
+     * @param panel  the panel to constrain
+     * @param height the maximum height in pixels
+     */
     private static void cap(JPanel panel, int height) {
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, height));
     }
 
+    /**
+     * Scales an image down to fit within a bounding box while preserving
+     * its aspect ratio. Does not upscale images smaller than the box.
+     *
+     * @param img  the source image
+     * @param maxW maximum allowed width
+     * @param maxH maximum allowed height
+     * @return the original image if already small enough, otherwise a scaled instance
+     */
     private static Image scaleToFit(Image img, int maxW, int maxH) {
         int w = img.getWidth(null), h = img.getHeight(null);
         double s = Math.min((double) maxW / w, (double) maxH / h);
@@ -616,6 +746,12 @@ public class ImageUpscalePanel extends JPanel {
                 Math.max(1, (int)(h * s)), Image.SCALE_SMOOTH);
     }
 
+    /**
+     * Converts a byte count into a human-readable string (B, KB, or MB).
+     *
+     * @param bytes the number of bytes
+     * @return a formatted string like "1.5 MB" or "?" for negative input
+     */
     private static String formatBytes(long bytes) {
         if (bytes < 0) { return "?"; }
         if (bytes < 1024) { return bytes + " B"; }

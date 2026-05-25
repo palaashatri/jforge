@@ -3,6 +3,9 @@ package atri.palaash.jforge.storage;
 import atri.palaash.jforge.model.ModelDescriptor;
 import atri.palaash.jforge.model.TaskType;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -24,27 +27,67 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Downloads AI models from the internet, with support for HuggingFace
+ * repositories and direct ONNX file URLs.
+ * <p>
+ * Think of this as a download manager for AI models. It can resume
+ * interrupted downloads, retry on failures, and automatically discover
+ * companion files (weights, configs) needed by the model.
+ */
 public class ModelDownloader {
 
+    /** Size of the I/O buffer used when streaming download data (16 KB). */
     private static final int BUFFER_SIZE = 16 * 1024;
+    /** Regex to extract model IDs from HuggingFace API JSON responses. */
     private static final Pattern HF_MODEL_ID_PATTERN = Pattern.compile("\\\"id\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+    /** Regex to extract file paths from HuggingFace API JSON responses. */
     private static final Pattern HF_RFILENAME_PATTERN = Pattern.compile("\\\"rfilename\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
 
+    /** HTTP client used for all network requests. */
     private final HttpClient httpClient;
+    /** Local file-system storage that tracks where models are saved. */
     private final ModelStorage storage;
+    /** Thread pool for asynchronous download operations. */
     private final Executor executor;
 
+    /**
+     * Creates a new downloader with the given HTTP client, storage backend,
+     * and executor for async tasks.
+     *
+     * @param httpClient the HTTP client for network requests
+     * @param storage    the local storage backend
+     * @param executor   the thread pool for async downloads
+     */
     public ModelDownloader(HttpClient httpClient, ModelStorage storage, Executor executor) {
         this.httpClient = httpClient;
         this.storage = storage;
         this.executor = executor;
     }
 
+    /**
+     * Checks whether a direct download URL is available for the given model.
+     * Models with ONNX files, HuggingFace resolve URLs, or PyTorch-only
+     * markers are considered downloadable.
+     *
+     * @param descriptor the model descriptor
+     * @return {@code true} if the model can be downloaded directly
+     */
     public boolean canDownload(ModelDescriptor descriptor) {
         String url = descriptor.sourceUrl();
         return url.contains(".onnx") || url.contains("/resolve/") || url.startsWith("hf-pytorch://");
     }
 
+    /**
+     * Downloads the model only if it is not already available on disk.
+     * <p>
+     * Like checking your closet before buying new clothes — if the
+     * model is already stored locally, returns immediately.
+     *
+     * @param descriptor       the model descriptor
+     * @param progressConsumer callback for download progress updates
+     * @return a future that completes with the path to the downloaded model
+     */
     public CompletableFuture<Path> downloadIfMissing(ModelDescriptor descriptor, Consumer<DownloadProgress> progressConsumer) {
         if (storage.isAvailable(descriptor)) {
             return CompletableFuture.completedFuture(storage.modelPath(descriptor));
@@ -52,6 +95,17 @@ public class ModelDownloader {
         return download(descriptor, progressConsumer);
     }
 
+    /**
+     * Downloads a model from its source URL to local storage.
+     * <p>
+     * This is the main download entry point. It streams the file to disk,
+     * also fetches any companion artifacts (weight files, configs), and
+     * cleans up partially-downloaded files if the operation fails.
+     *
+     * @param descriptor       the model descriptor
+     * @param progressConsumer callback for download progress updates
+     * @return a future that completes with the path to the downloaded model file
+     */
     public CompletableFuture<Path> download(ModelDescriptor descriptor, Consumer<DownloadProgress> progressConsumer) {
         return CompletableFuture.supplyAsync(() -> {
             Path target = storage.modelPath(descriptor);
@@ -69,7 +123,9 @@ public class ModelDownloader {
 
                 downloadUrlToPath(downloadUrl, target, progressConsumer);
                 writtenFiles.add(target);
+                // Download companion files (weights, configs) from HuggingFace if applicable
                 downloadCompanionFilesIfNeeded(descriptor, target.getParent(), progressConsumer, writtenFiles);
+                // Download known bundle files (UNet, text encoder, VAE) for well-known models
                 downloadKnownBundleFiles(descriptor, progressConsumer, writtenFiles);
 
                 System.out.println("[JForge] Download complete: " + descriptor.displayName()
@@ -78,6 +134,7 @@ public class ModelDownloader {
             } catch (Exception ex) {
                 System.out.println("[JForge] ERROR: Download failed: " + descriptor.displayName()
                         + " — " + ex.getMessage());
+                // Remove any partial files so we don't leave corrupt data on disk
                 for (Path written : writtenFiles) {
                     try {
                         Files.deleteIfExists(written);
@@ -89,6 +146,21 @@ public class ModelDownloader {
         }, executor);
     }
 
+    /**
+     * Downloads companion artifacts (weight files, binary data) that
+     * accompany the main ONNX model from a HuggingFace repository.
+     * <p>
+     * Think of this as buying a puzzle and also picking up the
+     * reference picture on the box — some models need extra files
+     * to run correctly.
+     *
+     * @param descriptor       the model descriptor
+     * @param targetDirectory  the directory where companion files will be saved
+     * @param progressConsumer callback for download progress
+     * @param writtenFiles     list to track all successfully written files (for cleanup on failure)
+     * @throws IOException          if network or file I/O fails
+     * @throws InterruptedException if the download thread is interrupted
+     */
     private void downloadCompanionFilesIfNeeded(ModelDescriptor descriptor,
                                                 Path targetDirectory,
                                                 Consumer<DownloadProgress> progressConsumer,
@@ -99,6 +171,7 @@ public class ModelDownloader {
             return;
         }
 
+        // Fetch the HuggingFace model API to discover available files
         String detailsBody = httpGetText("https://huggingface.co/api/models/" + hfPath.repoId());
         if (detailsBody.isBlank()) {
             return;
@@ -108,10 +181,12 @@ public class ModelDownloader {
         Matcher matcher = HF_RFILENAME_PATTERN.matcher(detailsBody);
         while (matcher.find()) {
             String filePath = matcher.group(1);
+            // Only consider files in the same folder, skip the main model file itself
             if (!filePath.startsWith(folder + "/") || filePath.equals(hfPath.filePath())) {
                 continue;
             }
             String fileName = filePath.substring(filePath.lastIndexOf('/') + 1);
+            // Only download known companion artifact types (.pb, .bin, .data, weight files)
             if (!isCompanionArtifact(fileName)) {
                 continue;
             }
@@ -123,6 +198,21 @@ public class ModelDownloader {
         }
     }
 
+    /**
+     * Downloads the full set of bundle files for well-known model types
+     * (SD 1.5, SD Turbo, SDXL Turbo, SDXL Base). Each bundle includes the
+     * UNet, text encoder(s), VAE decoder, scheduler config, and tokenizer files.
+     * <p>
+     * Like ordering a combo meal instead of individual items — these
+     * models need multiple files to work, and this method knows exactly
+     * which ones are needed for each model ID.
+     *
+     * @param descriptor       the model descriptor
+     * @param progressConsumer callback for download progress
+     * @param writtenFiles     list to track all successfully written files
+     * @throws IOException          if network or file I/O fails
+     * @throws InterruptedException if the download thread is interrupted
+     */
     private void downloadKnownBundleFiles(ModelDescriptor descriptor,
                                           Consumer<DownloadProgress> progressConsumer,
                                           List<Path> writtenFiles) throws IOException, InterruptedException {
@@ -156,28 +246,6 @@ public class ModelDownloader {
                             "tokenizer/merges.txt", "tokenizer/vocab.json",
                             "tokenizer_2/merges.txt", "tokenizer_2/vocab.json"
                     ), progressConsumer, writtenFiles);
-        } else if ("sd_v15_img2img".equals(descriptor.id())) {
-            // Img2Img reuses the SD v1.5 bundle + VAE encoder
-            downloadSdBundle(descriptor, "text-image/stable-diffusion-v15",
-                    List.of(
-                            "unet/model.onnx", "unet/weights.pb",
-                            "text_encoder/model.onnx",
-                            "vae_decoder/model.onnx",
-                            "vae_encoder/model.onnx",
-                            "scheduler/scheduler_config.json",
-                            "tokenizer/merges.txt", "tokenizer/special_tokens_map.json",
-                            "tokenizer/tokenizer_config.json", "tokenizer/vocab.json"
-                    ), progressConsumer, writtenFiles);
-        } else if ("sd_turbo_img2img".equals(descriptor.id())) {
-            // SD Turbo img2img — reuses SD Turbo bundle + VAE encoder from v1.5
-            downloadSdBundle(descriptor, "text-image/sd-turbo",
-                    List.of(
-                            "unet/model.onnx",
-                            "text_encoder/model.onnx",
-                            "vae_decoder/model.onnx",
-                            "tokenizer/merges.txt", "tokenizer/special_tokens_map.json",
-                            "tokenizer/tokenizer_config.json", "tokenizer/vocab.json"
-                    ), progressConsumer, writtenFiles);
         } else if ("sdxl_base_onnx".equals(descriptor.id())) {
             // SDXL Base 1.0 — dual text encoders, large UNet
             downloadSdBundle(descriptor, "text-image/sdxl-base",
@@ -193,6 +261,21 @@ public class ModelDownloader {
         }
     }
 
+    /**
+     * Downloads a set of files for a Stable Diffusion model bundle.
+     * <p>
+     * Each file is downloaded from the HuggingFace repository into a
+     * subdirectory under the storage root. Files that already exist
+     * and have content are skipped to avoid re-downloading.
+     *
+     * @param descriptor       the model descriptor
+     * @param localDir         the subdirectory under the storage root
+     * @param files            list of relative file paths to download
+     * @param progressConsumer callback for download progress
+     * @param writtenFiles     list to track all successfully written files
+     * @throws IOException          if network or file I/O fails
+     * @throws InterruptedException if the download thread is interrupted
+     */
     private void downloadSdBundle(ModelDescriptor descriptor, String localDir,
                                   List<String> files,
                                   Consumer<DownloadProgress> progressConsumer,
@@ -204,6 +287,7 @@ public class ModelDownloader {
         for (String relative : files) {
             Path target = storage.root().resolve(localDir).resolve(relative);
             Files.createDirectories(target.getParent());
+            // Skip files that already exist on disk (resume optimization)
             if (Files.exists(target) && Files.size(target) > 0) { continue; }
             String url = "https://huggingface.co/" + repo + "/resolve/" + revision + "/" + relative;
             downloadUrlToPath(url, target, progressConsumer);
@@ -211,6 +295,7 @@ public class ModelDownloader {
         }
     }
 
+    /** Maximum number of retry attempts when a download stalls or fails. */
     private static final int MAX_RETRIES = 5;
     private static final long STALL_TIMEOUT_MS = 90_000; // 90 seconds with no data → stall
 
@@ -247,6 +332,17 @@ public class ModelDownloader {
         throw lastException;
     }
 
+    /**
+     * Performs a single attempt to download a URL to a local file.
+     * Supports HTTP Range requests for resuming interrupted downloads
+     * and validates binary content for ONNX files.
+     *
+     * @param downloadUrl      the URL to download from
+     * @param target           the local file path to write to
+     * @param progressConsumer callback for download progress
+     * @throws IOException          if the download fails or content is invalid
+     * @throws InterruptedException if the download thread is interrupted
+     */
     private void downloadUrlToPathOnce(String downloadUrl,
                                        Path target,
                                        Consumer<DownloadProgress> progressConsumer) throws IOException, InterruptedException {
@@ -359,6 +455,14 @@ public class ModelDownloader {
         }
     }
 
+    /**
+     * Determines whether a file name corresponds to a companion artifact
+     * (weight files, binary data) that should be downloaded alongside the
+     * main ONNX model.
+     *
+     * @param fileName the file name to check
+     * @return {@code true} if the file is a companion artifact
+     */
     private boolean isCompanionArtifact(String fileName) {
         String lower = fileName.toLowerCase(Locale.ROOT);
         return lower.endsWith(".pb")
@@ -368,6 +472,13 @@ public class ModelDownloader {
                 || lower.contains("weight");
     }
 
+    /**
+     * Extracts the parent directory path from a file path string.
+     * If there is no parent (file at root), returns an empty string.
+     *
+     * @param filePath the file path to extract the parent from
+     * @return the parent folder path, or empty string if none
+     */
     private String parentFolder(String filePath) {
         int slash = filePath.lastIndexOf('/');
         if (slash <= 0) {
@@ -376,6 +487,18 @@ public class ModelDownloader {
         return filePath.substring(0, slash);
     }
 
+    /**
+     * Parses a HuggingFace resolve URL into its components: repository ID,
+     * revision (branch/tag/commit), and file path.
+     * <p>
+     * For example:
+     * {@code https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/unet/model.onnx}
+     * becomes repoId={@code runwayml/stable-diffusion-v1-5}, revision={@code main},
+     * filePath={@code unet/model.onnx}.
+     *
+     * @param sourceUrl the HuggingFace resolve URL to parse
+     * @return the parsed path record, or {@code null} if the URL is not a valid HF resolve URL
+     */
     private HfResolvePath parseHuggingFaceResolvePath(String sourceUrl) {
         String marker = "https://huggingface.co/";
         if (!sourceUrl.startsWith(marker) || !sourceUrl.contains("/resolve/")) {
@@ -397,9 +520,20 @@ public class ModelDownloader {
         return new HfResolvePath(repoId, revision, filePath);
     }
 
+    /** Record holding the parsed components of a HuggingFace resolve URL. */
     private record HfResolvePath(String repoId, String revision, String filePath) {
     }
 
+    /**
+     * Discovers text-to-image models available on HuggingFace by searching
+     * for ONNX and PyTorch models across multiple query categories.
+     * <p>
+     * Think of this as a librarian scanning the shelves to find new books
+     * that match your interests. Results include models with existing ONNX
+     * artifacts as well as PyTorch models flagged for conversion.
+     *
+     * @return a future that completes with a list of discovered model descriptors
+     */
     public CompletableFuture<List<ModelDescriptor>> discoverTextToImageModels() {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -410,6 +544,7 @@ public class ModelDownloader {
                     String details = httpGetText(detailUrl);
                     if (details.isBlank()) continue;
 
+                    // Check if the model is gated (requires authentication to access)
                     boolean isGated = details.contains("\"gated\"") &&
                             (details.contains("\"gated\":true") || details.contains("\"gated\":\"auto\"")
                             || details.contains("\"gated\": true") || details.contains("\"gated\": \"auto\""));
@@ -420,6 +555,7 @@ public class ModelDownloader {
                     boolean hasEsrgan = modelId.toLowerCase(Locale.ROOT).contains("esrgan")
                             || modelId.toLowerCase(Locale.ROOT).contains("realesrgan")
                             || modelId.toLowerCase(Locale.ROOT).contains("upscal");
+                    // Detect PyTorch-only models (those that need conversion to ONNX)
                     boolean hasPyTorch = details.contains("model_index.json")
                             || details.contains("diffusion_pytorch_model")
                             || details.contains(".safetensors")
@@ -427,6 +563,7 @@ public class ModelDownloader {
                     // Don't mark as PyTorch if it already has ONNX artifacts
                     boolean isPyTorchOnly = hasPyTorch && !hasOnnxUnet && !hasOnnxTransformer;
 
+                    // ── Classify model type and create appropriate descriptor ──
                     if (hasEsrgan) {
                         // ESRGAN upscaler — check for .onnx file
                         boolean hasOnnx = details.contains(".onnx");
@@ -439,9 +576,10 @@ public class ModelDownloader {
                         discovered.add(new ModelDescriptor(id,
                                 "HF: " + modelId + " (ESRGAN ONNX)",
                                 TaskType.IMAGE_UPSCALE, relativePath, sourceUrl,
-                                "Discovered ESRGAN/upscaler from Hugging Face."));
+                                "Discovered ESRGAN/upscaler from Hugging Face.",
+                                findFileSize(details, onnxFile)));
                     } else if (hasOnnxUnet && !isGated) {
-                        // ONNX SD model with UNet
+                        // ONNX SD model with UNet (Stable Diffusion 1.x / 2.x architecture)
                         String sourceUrl = "https://huggingface.co/" + modelId + "/resolve/main/unet/model.onnx";
                         if (!urlLooksAccessible(sourceUrl)) continue;
                         String id = "hf_" + modelId.toLowerCase(Locale.ROOT).replace('/', '_').replace('-', '_');
@@ -449,18 +587,20 @@ public class ModelDownloader {
                         String relativePath = "text-image/huggingface/" + modelId.replace('/', '-') + "/unet/model.onnx";
                         discovered.add(new ModelDescriptor(id, displayName,
                                 TaskType.TEXT_TO_IMAGE, relativePath, sourceUrl,
-                                "Discovered from Hugging Face ONNX listing."));
+                                "Discovered from Hugging Face ONNX listing.",
+                                findFileSize(details, "unet/model.onnx")));
                     } else if (hasOnnxTransformer && !isGated) {
-                        // ONNX SD3-type model with transformer
+                        // ONNX SD3-type model with transformer (Stable Diffusion 3.x / Flux architecture)
                         String sourceUrl = "https://huggingface.co/" + modelId + "/resolve/main/transformer/model.onnx";
                         String id = "hf_" + modelId.toLowerCase(Locale.ROOT).replace('/', '_').replace('-', '_');
                         String displayName = "HF: " + modelId + " (Transformer ONNX)";
                         String relativePath = "text-image/huggingface/" + modelId.replace('/', '-') + "/transformer/model.onnx";
                         discovered.add(new ModelDescriptor(id, displayName,
                                 TaskType.TEXT_TO_IMAGE, relativePath, sourceUrl,
-                                "Discovered SD 3.x-style ONNX model from Hugging Face."));
+                                "Discovered SD 3.x-style ONNX model from Hugging Face.",
+                                findFileSize(details, "transformer/model.onnx")));
                     } else if (isPyTorchOnly) {
-                        // PyTorch model — needs conversion to ONNX
+                        // PyTorch model — needs conversion to ONNX via the Python converter
                         String sourceUrl = "hf-pytorch://" + modelId;
                         String id = "hf_pt_" + modelId.toLowerCase(Locale.ROOT).replace('/', '_').replace('-', '_');
                         String gatedNote = isGated ? " 🔒" : "";
@@ -491,8 +631,41 @@ public class ModelDownloader {
         return null;
     }
 
+    /**
+     * Extract the file size (in bytes) for a given file within a HuggingFace
+     * model from the API JSON response. Returns 0 if not found.
+     */
+    private static long findFileSize(String detailsJson, String rfilename) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(detailsJson);
+            JsonNode siblings = root.get("siblings");
+            if (siblings != null && siblings.isArray()) {
+                for (JsonNode sibling : siblings) {
+                    JsonNode name = sibling.get("rfilename");
+                    JsonNode size = sibling.get("size");
+                    if (name != null && size != null && rfilename.equals(name.asText())) {
+                        long s = size.asLong(0);
+                        return s > 0 ? s : 0;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return 0;
+    }
+
+    /**
+     * Searches HuggingFace for models matching various text-to-image and
+     * upscaling-related queries, returning a set of candidate model IDs.
+     *
+     * @return a set of HuggingFace model IDs
+     * @throws IOException          if the network request fails
+     * @throws InterruptedException if the thread is interrupted
+     */
     private Set<String> fetchCandidateModelIds() throws IOException, InterruptedException {
         Set<String> ids = new LinkedHashSet<>();
+        // Search across multiple categories to find relevant models
         List<String> queries = List.of(
                 "text-to-image onnx",
                 "stable diffusion onnx",
@@ -522,6 +695,15 @@ public class ModelDownloader {
         return ids;
     }
 
+    /**
+     * Performs an HTTP GET request and returns the response body as a string.
+     * Returns empty string on non-2xx responses or null bodies.
+     *
+     * @param url the URL to fetch
+     * @return the response body, or empty string on failure
+     * @throws IOException          if the request fails
+     * @throws InterruptedException if the thread is interrupted
+     */
     private String httpGetText(String url) throws IOException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -534,6 +716,13 @@ public class ModelDownloader {
         return response.body() == null ? "" : response.body();
     }
 
+    /**
+     * Checks whether a URL is accessible by sending a lightweight HEAD request.
+     * Useful for pre-validating download URLs before committing to a full download.
+     *
+     * @param url the URL to check
+     * @return {@code true} if the URL returns a 2xx or 3xx status code
+     */
     private boolean urlLooksAccessible(String url) {
         try {
             HttpRequest request = HttpRequest.newBuilder()

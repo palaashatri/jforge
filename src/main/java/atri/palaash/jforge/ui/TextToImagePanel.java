@@ -10,8 +10,10 @@ import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JList;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -29,6 +31,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -100,6 +103,13 @@ public class TextToImagePanel extends JPanel {
     private AtomicBoolean cancellationFlag;
     private static final Pattern STEP_PATTERN = Pattern.compile("Denoising:\\s*(\\d+)/(\\d+)");
 
+    /**
+     * Constructs the text-to-image panel with all controls, listeners, and layout.
+     *
+     * @param models              list of available model descriptors to populate the model combo box
+     * @param modelDownloader     handles downloading models from remote sources
+     * @param inferenceService    handles running the ONNX inference pipeline
+     */
     public TextToImagePanel(List<ModelDescriptor> models,
                             ModelDownloader modelDownloader,
                             InferenceService inferenceService) {
@@ -109,15 +119,16 @@ public class TextToImagePanel extends JPanel {
 
         /* ---- init components ---- */
         modelCombo = new JComboBox<>(models.toArray(new ModelDescriptor[0]));
-        modelCombo.setRenderer((list, value, idx, sel, focus) -> {
-            JLabel lbl = new JLabel(value == null ? "" : value.displayName());
-            lbl.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-            if (sel) {
-                lbl.setBackground(list.getSelectionBackground());
-                lbl.setForeground(list.getSelectionForeground());
-                lbl.setOpaque(true);
+        modelCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value,
+                                                           int index, boolean isSelected,
+                                                           boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "" : ((ModelDescriptor) value).displayName());
+                setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+                return this;
             }
-            return lbl;
         });
 
         promptField = new JTextArea(3, 40);
@@ -143,10 +154,9 @@ public class TextToImagePanel extends JPanel {
 
         statusLabel = new JLabel("Ready");
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        statusLabel.setForeground(new Color(120, 120, 120));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 20, 8, 20));
 
-        runButton = new JButton("Generate");
+        runButton = new JButton("Imagine");
         cancelButton = new JButton("Cancel");
         cancelButton.setEnabled(false);
         cancelButton.setToolTipText("Cancel the current generation");
@@ -221,7 +231,7 @@ public class TextToImagePanel extends JPanel {
         heightField.setToolTipText("Output height in pixels (multiple of 8)");
         stylePresetBox.setToolTipText("Optional style modifier for the prompt");
         stepsSpinner.setToolTipText("Fewer steps = faster but lower quality. 10\u201320 recommended.");
-        runButton.setToolTipText("Generate image (\u2318Enter)");
+        runButton.setToolTipText("Imagine (\u2318Enter)");
         saveButton.setToolTipText("Save output image (\u2318S)");
 
         if (models.isEmpty()) {
@@ -236,6 +246,11 @@ public class TextToImagePanel extends JPanel {
     /*  Layout                                                             */
     /* ================================================================== */
 
+    /**
+     * Builds the full panel layout: model selector, prompt area, advanced settings,
+     * action buttons, progress bar, and the tabbed output area (preview, history,
+     * library, and log).
+     */
     private void buildLayout() {
         JPanel top = new JPanel();
         top.setLayout(new BoxLayout(top, BoxLayout.Y_AXIS));
@@ -300,6 +315,11 @@ public class TextToImagePanel extends JPanel {
         tabs.addTab("History", historyPanel);
         tabs.addTab("Library", promptLibraryPanel);
         tabs.addTab("Log", new JScrollPane(logArea));
+        tabs.addChangeListener(e -> {
+            int idx = tabs.getSelectedIndex();
+            if (idx == 1) historyPanel.load();
+            if (idx == 2) promptLibraryPanel.load();
+        });
         bottom.add(tabs, BorderLayout.CENTER);
 
         add(top, BorderLayout.NORTH);
@@ -307,6 +327,10 @@ public class TextToImagePanel extends JPanel {
         add(statusLabel, BorderLayout.SOUTH);
     }
 
+    /**
+     * Builds the collapsible advanced settings section containing negative prompt,
+     * steps, seed, aspect ratio, width, height, and style preset controls.
+     */
     private void buildAdvancedPanel() {
         advancedPanel.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
 
@@ -332,6 +356,10 @@ public class TextToImagePanel extends JPanel {
     /*  Inference                                                          */
     /* ================================================================== */
 
+    /**
+     * Starts the generation pipeline: validates input, downloads the model if needed,
+     * runs ONNX inference, and displays the result in the preview area.
+     */
     private void runInference() {
         ModelDescriptor selectedModel = (ModelDescriptor) modelCombo.getSelectedItem();
         if (selectedModel == null) {
@@ -416,11 +444,19 @@ public class TextToImagePanel extends JPanel {
         }));
     }
 
+    /**
+     * Updates the UI to reflect a running or idle state.
+     * When busy, the progress bar tracks denoising steps if the message contains
+     * a "Denoising: current/total" pattern.
+     *
+     * @param busy    true to show progress state, false to restore idle state
+     * @param message status text to display (e.g. "Preparing...", "Generating image...")
+     */
     private void setRunning(boolean busy, String message) {
         running = busy;
         runButton.setEnabled(!busy);
         cancelButton.setEnabled(busy);
-        runButton.setText(busy ? message : "Generate");
+        runButton.setText(busy ? message : "Imagine");
         statusLabel.setText(message);
         progressBar.setVisible(busy);
         if (busy) {
@@ -437,6 +473,9 @@ public class TextToImagePanel extends JPanel {
         }
     }
 
+    /**
+     * Signals the inference thread to cancel by setting the cancellation flag.
+     */
     private void cancelInference() {
         if (cancellationFlag != null) {
             cancellationFlag.set(true);
@@ -445,6 +484,12 @@ public class TextToImagePanel extends JPanel {
         statusLabel.setText("Cancelling\u2026");
     }
 
+    /**
+     * Processes the inference result: logs details, enables the save button if
+     * successful, and renders the preview thumbnail.
+     *
+     * @param result the outcome of the inference call
+     */
     private void renderResult(InferenceResult result) {
         if (result.success()) {
             appendLog(result.details() + "\n" + result.output());
@@ -458,6 +503,11 @@ public class TextToImagePanel extends JPanel {
         }
     }
 
+    /**
+     * Loads the generated image from disk and displays a scaled-down preview.
+     *
+     * @param path file path to the generated output image
+     */
     private void renderPreview(String path) {
         try {
             Image image = ImageIO.read(Path.of(path).toFile());
@@ -475,6 +525,10 @@ public class TextToImagePanel extends JPanel {
     /*  Save output                                                        */
     /* ================================================================== */
 
+    /**
+     * Opens a file-save dialog to let the user export the last generated image
+     * to a location of their choice. Defaults to PNG format.
+     */
     private void saveOutput() {
         if (lastArtifactPath == null || lastArtifactPath.isBlank()) { return; }
         JFileChooser chooser = new JFileChooser();
@@ -499,6 +553,12 @@ public class TextToImagePanel extends JPanel {
     /*  Presets & history                                                   */
     /* ================================================================== */
 
+    /**
+     * Applies a saved prompt preset by filling in the prompt, negative prompt,
+     * and style fields.
+     *
+     * @param preset the preset to load
+     */
     private void applyPreset(PromptPreset preset) {
         promptField.setText(preset.prompt());
         negativePromptField.setText(preset.negativePrompt());
@@ -506,6 +566,10 @@ public class TextToImagePanel extends JPanel {
         statusLabel.setText("Preset loaded: " + preset.name());
     }
 
+    /**
+     * Saves the current prompt settings as a new preset in the prompt library.
+     * The preset is auto-named with a timestamp suffix.
+     */
     public void saveCurrentPreset() {
         String name = "Preset " + (System.currentTimeMillis() % 10000);
         PromptPreset preset = new PromptPreset(
@@ -516,6 +580,14 @@ public class TextToImagePanel extends JPanel {
         statusLabel.setText("Preset saved: " + name);
     }
 
+    /**
+     * Records a completed generation into the history panel and writes a
+     * corresponding log entry to the log file on disk.
+     *
+     * @param modelName the display name of the model used
+     * @param prompt    the text prompt that was used
+     * @param result    the inference result (success/failure + artifact path)
+     */
     private void addHistoryEntry(String modelName, String prompt, InferenceResult result) {
         String size = widthField.getText().trim() + "\u00D7" + heightField.getText().trim();
         long seed = ((Number) seedSpinner.getValue()).longValue();
@@ -528,6 +600,13 @@ public class TextToImagePanel extends JPanel {
         writeLog(entry, result);
     }
 
+    /**
+     * Appends a single-line log entry to the persistent log file under
+     * ~/.jforge-models/outputs/logs/jforge.log.
+     *
+     * @param entry  the history entry metadata
+     * @param result the inference result details
+     */
     private void writeLog(HistoryEntry entry, InferenceResult result) {
         try {
             Path logDir = Path.of(System.getProperty("user.home"),
@@ -542,6 +621,10 @@ public class TextToImagePanel extends JPanel {
         } catch (Exception ignored) { }
     }
 
+    /**
+     * Opens the logs directory (~/.jforge-models/outputs/logs) in the
+     * desktop file manager.
+     */
     public void openLogsFolder() {
         try {
             Path logDir = Path.of(System.getProperty("user.home"),
@@ -557,14 +640,32 @@ public class TextToImagePanel extends JPanel {
     /*  GPU (injected from MainFrame menu)                                 */
     /* ================================================================== */
 
+    /**
+     * Injects a supplier that tells the panel whether GPU acceleration is
+     * enabled. Called from the main menu bar's "Use GPU" toggle.
+     *
+     * @param supplier returns true if GPU should be used
+     */
     public void setGpuSupplier(BooleanSupplier supplier) {
         this.gpuSupplier = supplier;
     }
 
+    /**
+     * Sets the model storage backend, used to filter the model combo to
+     * only show locally available models.
+     *
+     * @param storage the model storage instance
+     */
     public void setModelStorage(ModelStorage storage) {
         this.modelStorage = storage;
     }
 
+    /**
+     * Registers a callback that opens the Model Manager panel. Invoked when
+     * the user tries to generate but no models are available.
+     *
+     * @param callback the runnable to switch to the Model Manager card
+     */
     public void setOpenModelManager(Runnable callback) {
         this.openModelManager = callback;
     }
@@ -573,6 +674,12 @@ public class TextToImagePanel extends JPanel {
     /*  Model updates                                                      */
     /* ================================================================== */
 
+    /**
+     * Replaces the model combo box contents with a new list of descriptors.
+     * Only models that are locally available (according to modelStorage) are shown.
+     *
+     * @param models the complete list of model descriptors for this task type
+     */
     public void updateModels(List<ModelDescriptor> models) {
         List<ModelDescriptor> available = models;
         if (modelStorage != null) {
@@ -596,6 +703,11 @@ public class TextToImagePanel extends JPanel {
     /*  Helpers                                                            */
     /* ================================================================== */
 
+    /**
+     * Appends a line to the log text pane shown in the Log tab.
+     *
+     * @param text the message to log
+     */
     private void appendLog(String text) {
         try {
             var doc = logArea.getStyledDocument();
@@ -603,6 +715,10 @@ public class TextToImagePanel extends JPanel {
         } catch (Exception ignored) { }
     }
 
+    /**
+     * Reads the selected aspect ratio and updates the width/height fields
+     * accordingly. "Custom" leaves the fields unchanged.
+     */
     private void applyAspectRatio() {
         switch (String.valueOf(aspectRatioBox.getSelectedItem())) {
             case "1:1" -> { widthField.setText("512"); heightField.setText("512"); }
@@ -613,14 +729,27 @@ public class TextToImagePanel extends JPanel {
         }
     }
 
+    /**
+     * Creates a small-format label used as a field header throughout the UI.
+     *
+     * @param text the label text
+     * @return a JLabel styled as a tiny header (11pt plain)
+     */
     private static JLabel tinyLabel(String text) {
         JLabel lbl = new JLabel(text);
         lbl.setFont(lbl.getFont().deriveFont(Font.PLAIN, 11f));
-        lbl.setForeground(new Color(130, 130, 130));
         lbl.setBorder(BorderFactory.createEmptyBorder(0, 2, 2, 0));
         return lbl;
     }
 
+    /**
+     * Wraps a UI component with a tiny label above it, forming a labeled
+     * control row (e.g. "Steps" above a spinner).
+     *
+     * @param text the label text
+     * @param comp the control component
+     * @return a panel containing the label and component
+     */
     private static JPanel labeled(String text, java.awt.Component comp) {
         JPanel p = new JPanel(new BorderLayout(0, 4));
         p.add(tinyLabel(text), BorderLayout.NORTH);
@@ -628,10 +757,26 @@ public class TextToImagePanel extends JPanel {
         return p;
     }
 
+    /**
+     * Constrains a panel's maximum height so it does not grow vertically
+     * beyond the given value when placed in a BoxLayout.
+     *
+     * @param panel  the panel to constrain
+     * @param height the maximum height in pixels
+     */
     private static void cap(JPanel panel, int height) {
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, height));
     }
 
+    /**
+     * Scales an image down to fit within a bounding box while preserving
+     * its aspect ratio. Does not upscale images smaller than the box.
+     *
+     * @param img  the source image
+     * @param maxW maximum allowed width
+     * @param maxH maximum allowed height
+     * @return the original image if already small enough, otherwise a scaled instance
+     */
     private static Image scaleToFit(Image img, int maxW, int maxH) {
         int w = img.getWidth(null), h = img.getHeight(null);
         double s = Math.min((double) maxW / w, (double) maxH / h);
@@ -640,10 +785,24 @@ public class TextToImagePanel extends JPanel {
                 Math.max(1, (int)(h * s)), Image.SCALE_SMOOTH);
     }
 
+    /**
+     * Safely parses an integer from a string, returning a fallback value
+     * if the string is not a valid number.
+     *
+     * @param t  the string to parse
+     * @param fb the fallback value
+     * @return the parsed integer, or fb on failure
+     */
     private static int parseInt(String t, int fb) {
         try { return Integer.parseInt(t.trim()); } catch (Exception e) { return fb; }
     }
 
+    /**
+     * Converts a byte count into a human-readable string (B, KB, or MB).
+     *
+     * @param bytes the number of bytes
+     * @return a formatted string like "1.5 MB" or "?" for negative input
+     */
     private static String formatBytes(long bytes) {
         if (bytes < 0) { return "?"; }
         if (bytes < 1024) { return bytes + " B"; }

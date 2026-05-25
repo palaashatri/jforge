@@ -4,13 +4,16 @@
 
 Desktop Java Swing application for ONNX Runtime inference with intelligent GPU acceleration across NVIDIA, Apple, Intel, and AMD hardware.
 
+<img width="2302" height="1920" alt="image" src="https://github.com/user-attachments/assets/3d286f6d-2cc0-493c-996b-6c3f5c8da120" />
+
+> I don't know why it said "lultelpoop" but that's just stable diffusion on a weak chip I guess.
+
 
 ## Features
 
 ### Image Generation
 - **Text → Image**: Stable Diffusion v1.5, SD Turbo, SDXL Turbo, SDXL Base 1.0, SD 3.5 (MMDiT)
-- **Image → Image**: Img2Img with adjustable strength + inpainting
-- **Image Upscaling**: Real-ESRGAN 4× super-resolution with before/after preview
+- **Image Enhancement**: Real-ESRGAN 4× super-resolution with before/after preview
 - **Prompt library**: saved presets, tags, and search
 - Negative prompts + prompt weighting
 - Seed control + reproducibility

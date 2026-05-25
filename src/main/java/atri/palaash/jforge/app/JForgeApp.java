@@ -17,8 +17,20 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * Application entry point for JForge. Bootstraps the model registry, storage,
+ * downloader, inference services, and launches the main Swing window with a
+ * macOS-optimized look and feel.
+ */
 public class JForgeApp {
 
+    /**
+     * Application entry point. Configures macOS desktop integration, initializes
+     * the model registry, storage, HTTP client, downloader, inference services,
+     * and opens the main window on the Swing event thread.
+     *
+     * @param args command-line arguments (unused)
+     */
     public static void main(String[] args) {
         configureDesktopIntegration();
 
@@ -43,13 +55,18 @@ public class JForgeApp {
 
         Runtime.getRuntime().addShutdownHook(new Thread(workerPool::close));
 
+        NativeLookAndFeel.apply();
+
         SwingUtilities.invokeLater(() -> {
-            NativeLookAndFeel.apply();
             MainFrame frame = new MainFrame(registry, storage, downloader, services);
             frame.setVisible(true);
         });
     }
 
+    /**
+     * Sets macOS-specific system properties for native menu bar integration
+     * and FlatLaf embedded title bar styling. No-op on other operating systems.
+     */
     private static void configureDesktopIntegration() {
         String osName = System.getProperty("os.name", "").toLowerCase();
         if (osName.contains("mac")) {

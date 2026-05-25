@@ -38,10 +38,26 @@ import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Central ONNX inference engine for all AI models in JForge.
+ * <p>
+ * Think of this as a universal adapter: it loads different kinds of AI models
+ * (image generation, upscaling, etc.), runs them through the ONNX Runtime,
+ * and produces a result. Each model type (e.g. Stable Diffusion v1.5, SDXL,
+ * Real-ESRGAN) has its own pipeline method, but they all share the same
+ * session caching, tokenizer caching, and GPU provider selection logic.
+ * </p>
+ */
 public class GenericOnnxService implements InferenceService {
 
+    /** Shared Jackson JSON mapper used for reading scheduler configs and tokenizer files. */
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    /** Regex pattern that splits text into words, contractions, punctuation, and whitespace for BPE tokenization. */
     private static final Pattern TOKEN_PATTERN = Pattern.compile("'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+");
+
+    /* ── Pre-warmed environment & provider cache ────────────────────── */
+    /** Name of the GPU execution provider detected at startup (e.g. "CoreMLExecutionProvider"), or empty if using CPU. */
+    private static volatile String detectedProvider = "";
 
     /* ── Session & Tokenizer Caches ────────────────────────────────── */
     /**
@@ -66,18 +82,74 @@ public class GenericOnnxService implements InferenceService {
                     return false;
                 }
             };
+    /** Cache of loaded CLIP tokenizers keyed by "vocabPath|mergesPath". Tokenizers are expensive to parse from JSON. */
     private static final ConcurrentHashMap<String, ClipTokenizer> TOKENIZER_CACHE = new ConcurrentHashMap<>();
+    /** Cache of loaded T5 (SentencePiece) tokenizers keyed by tokenizer.json path. */
     private static final ConcurrentHashMap<String, T5Tokenizer> T5_TOKENIZER_CACHE = new ConcurrentHashMap<>();
+    /** Cached execution provider key; used to invalidate sessions when the EP changes between runs. */
     private static volatile String cachedEpKey = "";
 
+    /** The kind of image task this service handles (e.g. text-to-image, upscaling). */
     private final TaskType taskType;
+    /** Persistent storage for locating model files on disk. */
     private final ModelStorage storage;
+    /** Async executor for running inference without blocking the UI thread. */
     private final Executor executor;
 
+    /**
+     * Creates a new inference service for the given task type.
+     *
+     * @param taskType what kind of model this service will run (text-to-image, upscaling, etc.)
+     * @param storage  provides the filesystem paths where model files are stored
+     * @param executor thread pool for running inference asynchronously
+     */
     public GenericOnnxService(TaskType taskType, ModelStorage storage, Executor executor) {
         this.taskType = taskType;
         this.storage = storage;
         this.executor = executor;
+        probeGpuOnce();
+    }
+
+    /** Whether the GPU availability probe has already been run (prevents repeated attempts). */
+    private static boolean gpuProbed = false;
+    /**
+     * Probe for available GPU execution providers once at startup.
+     * Tries each candidate EP (CoreML, CUDA, TensorRT, etc.) and caches the first one that works.
+     * Sets {@link #detectedProvider} to the winner, or leaves it empty for CPU-only.
+     */
+    private static synchronized void probeGpuOnce() {
+        if (gpuProbed) return;
+        gpuProbed = true;
+        try {
+            OrtEnvironment.getEnvironment(); // pre-warm
+        } catch (Exception e) {
+            System.err.println("[JForge] WARN: ONNX Runtime env init: " + e.getMessage());
+        }
+        try (OrtSession.SessionOptions opts = new OrtSession.SessionOptions()) {
+            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            int cpus = Runtime.getRuntime().availableProcessors();
+            opts.setIntraOpNumThreads(Math.max(1, cpus - 1));
+            opts.setInterOpNumThreads(Math.max(1, Math.min(cpus / 2, 4)));
+            tryEnableMemoryOptimizations(opts);
+            // Attempt GPU providers; falls back to CPU if none available
+            String os = System.getProperty("os.name", "").toLowerCase();
+            String provider = tryProbeGpuProvider(opts, os);
+            if (provider != null && !provider.isEmpty()) {
+                detectedProvider = provider;
+                System.out.println("[JForge] GPU probe: " + provider + " available ✓");
+            } else {
+                System.out.println("[JForge] GPU probe: no GPU provider available, will use CPU");
+            }
+        } catch (Exception e) {
+            System.out.println("[JForge] GPU probe: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Return the cached GPU provider name, or empty string if CPU is used.
+     */
+    public static String detectedProvider() {
+        return detectedProvider;
     }
 
     /* ── Cache helpers ─────────────────────────────────────────────── */
@@ -162,6 +234,18 @@ public class GenericOnnxService implements InferenceService {
         cachedEpKey = "";
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Dispatches to the correct pipeline based on the model ID in the request.
+     * Supported models: Real-ESRGAN, SD v1.5, SD Turbo, SDXL Turbo, SDXL Base, SD 3.x.
+     * Also intercepts stderr to capture ONNX Runtime diagnostic messages and forwards them
+     * to the progress callback.
+     * </p>
+     *
+     * @param request the inference request specifying model, prompt, dimensions, etc.
+     * @return a future that resolves to the inference result (image path or error)
+     */
     @Override
     public CompletableFuture<InferenceResult> run(InferenceRequest request) {
         return CompletableFuture.supplyAsync(() -> {
@@ -188,6 +272,7 @@ public class GenericOnnxService implements InferenceService {
                 int cpus = Runtime.getRuntime().availableProcessors();
                 sessionOptions.setIntraOpNumThreads(Math.max(1, cpus - 1));
                 sessionOptions.setInterOpNumThreads(Math.max(1, Math.min(cpus / 2, 4)));
+                tryEnableMemoryOptimizations(sessionOptions);
                 ProviderSelection providerSelection = configureExecutionProvider(sessionOptions, request.preferGpu());
                 System.out.println("[JForge] Using EP: " + providerSelection.provider()
                         + (providerSelection.notes().isBlank() ? "" : " (" + providerSelection.notes() + ")"));
@@ -220,14 +305,6 @@ public class GenericOnnxService implements InferenceService {
                         && request.model().relativePath().contains("transformer/")) {
                     return runSd3(environment, sessionOptions, request, providerSelection.provider());
                 }
-                // Img2Img pipelines
-                if ("sd_v15_img2img".equals(request.model().id())) {
-                    return runImg2Img(environment, sessionOptions, request, providerSelection.provider(), false);
-                }
-                if ("sd_turbo_img2img".equals(request.model().id())) {
-                    return runImg2Img(environment, sessionOptions, request, providerSelection.provider(), true);
-                }
-
                 String details = "Model loaded but generation is not implemented for this ONNX pipeline: "
                         + request.model().displayName() + " | task=" + taskType.displayName()
                         + " | EP=" + providerSelection.provider()
@@ -258,10 +335,24 @@ public class GenericOnnxService implements InferenceService {
         }, executor);
     }
 
+    /**
+     * Run the full Stable Diffusion v1.5 pipeline: text encoding, DDIM denoising (with
+     * classifier-free guidance), and VAE decoding.
+     * <p>
+     * Steps: tokenize prompt → CLIP text encoder → create random latents → DDIM loop
+     * (UNet predicts noise → guidance → step) → VAE decoder → save image.
+     * </p>
+     *
+     * @param environment   shared ONNX Runtime environment
+     * @param sessionOptions session configuration (optimisation levels, thread counts, EP)
+     * @param request       user's inference request (prompt, size, steps, etc.)
+     * @param provider      display name of the execution provider in use
+     * @return the result containing the generated image path, or a failure message
+     */
     private InferenceResult runStableDiffusionV15(OrtEnvironment environment,
-                                                   OrtSession.SessionOptions sessionOptions,
-                                                   InferenceRequest request,
-                                                   String provider) {
+                                                    OrtSession.SessionOptions sessionOptions,
+                                                    InferenceRequest request,
+                                                    String provider) {
         try {
             int width = Math.max(256, (request.width() / 8) * 8);
             int height = Math.max(256, (request.height() / 8) * 8);
@@ -352,6 +443,11 @@ public class GenericOnnxService implements InferenceService {
                     if (request.isCancelled()) {
                         return InferenceResult.fail("Cancelled by user.");
                     }
+
+                    if (provider.contains("CoreML") && stepIndex % 5 == 4) {
+                        System.gc();
+                        System.runFinalization();
+                    }
                 }
 
                 request.reportProgress("Decoding latents with VAE\u2026");
@@ -387,10 +483,23 @@ public class GenericOnnxService implements InferenceService {
     /*  guidance, uses Euler-based single-step scheduler).                 */
     /* ================================================================== */
 
+    /**
+     * Run the distilled SD Turbo pipeline (1–8 steps, no classifier-free guidance).
+     * <p>
+     * Uses an Euler-style single-step scheduler instead of DDIM. Much faster than
+     * full SD v1.5 but produces lower-quality images that are still recognisable.
+     * </p>
+     *
+     * @param environment   shared ONNX Runtime environment
+     * @param sessionOptions session configuration
+     * @param request       user's inference request
+     * @param provider      execution provider display name
+     * @return the result containing the generated image path, or a failure message
+     */
     private InferenceResult runStableDiffusionTurbo(OrtEnvironment environment,
-                                                    OrtSession.SessionOptions sessionOptions,
-                                                    InferenceRequest request,
-                                                    String provider) {
+                                                     OrtSession.SessionOptions sessionOptions,
+                                                     InferenceRequest request,
+                                                     String provider) {
         try {
             int width  = Math.max(256, (request.width()  / 8) * 8);
             int height = Math.max(256, (request.height() / 8) * 8);
@@ -506,7 +615,14 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    /** Resolve tokenizer file — try sd-turbo dir first, then fall back to sd-v1.5 dir. */
+    /**
+     * Resolve a tokenizer file path — try the turbo model directory first, then fall back
+     * to the SD v1.5 directory (which shares the same vocabulary).
+     *
+     * @param turboBase    base path of the SD Turbo model
+     * @param relativeName relative path to the tokenizer file (e.g. "tokenizer/vocab.json")
+     * @return the first existing path, or the turbo path (which will trigger a missing-file error)
+     */
     private Path resolveTokenizerFile(Path turboBase, String relativeName) {
         Path turboPath = turboBase.resolve(relativeName);
         if (java.nio.file.Files.exists(turboPath)) { return turboPath; }
@@ -515,7 +631,12 @@ public class GenericOnnxService implements InferenceService {
         return turboPath; // will trigger missing-file error
     }
 
-    /** Generate evenly-spaced timesteps for turbo distillation (1000 → 0 in `steps` jumps). */
+    /**
+     * Generate evenly-spaced timesteps for turbo distillation (1000 → 0 in {@code steps} jumps).
+     *
+     * @param steps number of denoising steps
+     * @return array of timestep indices descending from 999 to 0
+     */
     private static int[] turboTimesteps(int steps) {
         int[] ts = new int[steps];
         for (int i = 0; i < steps; i++) {
@@ -525,7 +646,13 @@ public class GenericOnnxService implements InferenceService {
         return ts;
     }
 
-    /** Approximate sigma from timestep for the turbo scheduler. */
+    /**
+     * Approximate sigma (noise level) from a timestep for the turbo Euler scheduler.
+     * Uses a simplified alpha_bar schedule based on sqrt(1-alpha_bar)/sqrt(alpha_bar).
+     *
+     * @param timestep the current denoising timestep (0–999)
+     * @return the approximate sigma value for that timestep
+     */
     private static float turboSigma(int timestep) {
         // SD Turbo uses ~linear sigma schedule from sqrt(1-alpha_bar) / sqrt(alpha_bar)
         float t = timestep / 999.0f;
@@ -533,7 +660,19 @@ public class GenericOnnxService implements InferenceService {
         return (float) Math.sqrt((1 - alphaBar) / alphaBar);
     }
 
-    /** Euler step: x_{t-1} = x_t + (sigma_prev - sigma) * noise_pred (scaled). */
+    /**
+     * Single Euler integration step: x_{{t-1}} = x_t + (sigma_prev - sigma) * noise_pred.
+     * <p>
+     * This is the simplest ODE solver — it approximates the reverse diffusion process
+     * by stepping along the estimated noise gradient.
+     * </p>
+     *
+     * @param latents   current latent array [1][C][H][W]
+     * @param noisePred predicted noise (velocity) from the UNet [C][H][W]
+     * @param sigma     noise level at current timestep
+     * @param sigmaPrev noise level at the next (earlier) timestep
+     * @return updated latents after one Euler step
+     */
     private static float[][][][] eulerStep(float[][][][] latents, float[][][] noisePred,
                                            float sigma, float sigmaPrev) {
         int ch = latents[0].length, h = latents[0][0].length, w = latents[0][0][0].length;
@@ -554,10 +693,24 @@ public class GenericOnnxService implements InferenceService {
     /*  1–4 step distilled pipeline, 512×512 native.                      */
     /* ================================================================== */
 
+    /**
+     * Run the distilled SDXL Turbo pipeline (1–8 steps, no classifier-free guidance).
+     * <p>
+     * Uses dual text encoders (CLIP-L + OpenCLIP-bigG), concatenates their outputs,
+     * and passes them together with pooled embeddings and time IDs into the UNet.
+     * The denoising loop uses the same Euler single-step scheduler as SD Turbo.
+     * </p>
+     *
+     * @param environment   shared ONNX Runtime environment
+     * @param sessionOptions session configuration
+     * @param request       user's inference request
+     * @param provider      execution provider display name
+     * @return the result containing the generated image path, or a failure message
+     */
     private InferenceResult runSdxlTurbo(OrtEnvironment environment,
-                                         OrtSession.SessionOptions sessionOptions,
-                                         InferenceRequest request,
-                                         String provider) {
+                                          OrtSession.SessionOptions sessionOptions,
+                                          InferenceRequest request,
+                                          String provider) {
         try {
             int width  = Math.max(256, (request.width()  / 8) * 8);
             int height = Math.max(256, (request.height() / 8) * 8);
@@ -741,10 +894,23 @@ public class GenericOnnxService implements InferenceService {
     /*  scheduler, 1024×1024 native resolution.                           */
     /* ================================================================== */
 
+    /**
+     * Run the full SDXL Base 1.0 pipeline with classifier-free guidance and Euler Discrete scheduler.
+     * <p>
+     * Dual text encoders, batched (neg + pos) embeddings, time IDs, and a full
+     * denoising schedule (typically 30 steps) produce 1024×1024 images.
+     * </p>
+     *
+     * @param environment   shared ONNX Runtime environment
+     * @param sessionOptions session configuration
+     * @param request       user's inference request
+     * @param provider      execution provider display name
+     * @return the result containing the generated image path, or a failure message
+     */
     private InferenceResult runSdxlBase(OrtEnvironment environment,
-                                        OrtSession.SessionOptions sessionOptions,
-                                        InferenceRequest request,
-                                        String provider) {
+                                         OrtSession.SessionOptions sessionOptions,
+                                         InferenceRequest request,
+                                         String provider) {
         try {
             int width  = Math.max(512, (request.width()  / 8) * 8);
             int height = Math.max(512, (request.height() / 8) * 8);
@@ -1006,10 +1172,24 @@ public class GenericOnnxService implements InferenceService {
     /*  dual CLIP encoders (L + G), 16-channel latents, 1024×1024.        */
     /* ================================================================== */
 
+    /**
+     * Run the Stable Diffusion 3.x pipeline (MMDiT transformer, Flow Matching Euler scheduler).
+     * <p>
+     * SD 3.x uses three text encoders (CLIP-L, CLIP-G, optional T5-XXL), 16-channel latents,
+     * and a flow-matching denoising objective. Each encoder is loaded, run, and evicted
+     * sequentially to keep peak memory under control (~6 GB out of ~12 GB total model size).
+     * </p>
+     *
+     * @param environment   shared ONNX Runtime environment
+     * @param sessionOptions session configuration
+     * @param request       user's inference request
+     * @param provider      execution provider display name
+     * @return the result containing the generated image path, or a failure message
+     */
     private InferenceResult runSd3(OrtEnvironment environment,
-                                   OrtSession.SessionOptions sessionOptions,
-                                   InferenceRequest request,
-                                   String provider) {
+                                    OrtSession.SessionOptions sessionOptions,
+                                    InferenceRequest request,
+                                    String provider) {
         try {
             int width  = Math.max(512, (request.width()  / 8) * 8);
             int height = Math.max(512, (request.height() / 8) * 8);
@@ -1455,346 +1635,20 @@ public class GenericOnnxService implements InferenceService {
     /*  Image-to-Image / Inpainting (SD v1.5 or SD Turbo ONNX)           */
     /* ================================================================== */
 
-    private InferenceResult runImg2Img(OrtEnvironment environment,
-                                       OrtSession.SessionOptions sessionOptions,
-                                       InferenceRequest request,
-                                       String provider,
-                                       boolean turboMode) {
-        try {
-            String inputPath = request.inputImagePath();
-            if (inputPath == null || inputPath.isBlank()) {
-                return InferenceResult.fail("Img2Img requires an input image. Choose an image first.");
-            }
-
-            BufferedImage inputImage = ImageIO.read(new File(inputPath));
-            if (inputImage == null) {
-                return InferenceResult.fail("Cannot read image: " + inputPath);
-            }
-
-            int width  = Math.max(256, (request.width()  / 8) * 8);
-            int height = Math.max(256, (request.height() / 8) * 8);
-            int latentW = width  / 8;
-            int latentH = height / 8;
-            double strength = Math.max(0.01, Math.min(1.0, request.strength()));
-            double guidanceScale = request.promptWeight() > 0 ? request.promptWeight() : 7.5;
-
-            String baseDir = turboMode ? "text-image/sd-turbo" : "text-image/stable-diffusion-v15";
-            Path base = storage.root().resolve(baseDir);
-            Path textEncoderPath = base.resolve("text_encoder/model.onnx");
-            Path unetPath        = base.resolve("unet/model.onnx");
-            Path vaeDecoderPath  = base.resolve("vae_decoder/model.onnx");
-
-            // VAE encoder: prefer local bundle, fall back to SD v1.5's encoder
-            Path vaeEncoderPath = base.resolve("vae_encoder/model.onnx");
-            if (!java.nio.file.Files.exists(vaeEncoderPath)) {
-                vaeEncoderPath = storage.root()
-                        .resolve("text-image/stable-diffusion-v15/vae_encoder/model.onnx");
-            }
-
-            Path vocab = resolveTokenizerFile(base, "tokenizer/vocab.json");
-            Path merges = resolveTokenizerFile(base, "tokenizer/merges.txt");
-
-            for (Path p : List.of(textEncoderPath, unetPath, vaeDecoderPath, vaeEncoderPath, vocab, merges)) {
-                if (!java.nio.file.Files.exists(p)) {
-                    return InferenceResult.fail("Img2Img bundle is incomplete (missing "
-                            + p.getFileName() + "). Download the model + VAE encoder from Model Manager.");
-                }
-            }
-
-            // Resize input image to target dimensions
-            request.reportProgress("Resizing input image to " + width + "\u00d7" + height + "\u2026");
-            BufferedImage resized = resizeImage(inputImage, width, height, "lanczos");
-
-            // Load mask if provided (for inpainting)
-            BufferedImage maskImage = null;
-            float[][][][] maskLatents = null;
-            if (request.maskImagePath() != null && !request.maskImagePath().isBlank()) {
-                maskImage = ImageIO.read(new File(request.maskImagePath()));
-                if (maskImage != null) {
-                    maskImage = resizeImage(maskImage, width, height, "bilinear");
-                    request.reportProgress("Mask loaded for inpainting.");
-                }
-            }
-
-            // Convert input image to tensor [1, 3, H, W] normalized to [-1, 1]
-            float[][][][] imageTensor = imageToLatentInput(resized);
-
-            ClipTokenizer tokenizer = getOrCreateTokenizer(vocab, merges);
-            long[] tokens = tokenizer.encode(request.prompt(), 77);
-            long[] uncondTokens = tokenizer.encode("", 77);
-
-            request.reportProgress("Loading models for Img2Img pipeline\u2026");
-            OrtSession textEncoder = getOrCreateSession(environment, textEncoderPath, sessionOptions);
-            OrtSession unet = getOrCreateSession(environment, unetPath, sessionOptions);
-            OrtSession vaeDecoder = getOrCreateSession(environment, vaeDecoderPath, sessionOptions);
-            OrtSession vaeEncoder = getOrCreateSession(environment, vaeEncoderPath, sessionOptions);
-            {
-
-                // Text encoding
-                request.reportProgress("Encoding prompt\u2026");
-                float[][][] textEmbed = runTextEncoder(environment, textEncoder, tokens);
-
-                float[][][] promptEmbedding;
-                if (turboMode) {
-                    // SD Turbo: no classifier-free guidance
-                    promptEmbedding = textEmbed;
-                    guidanceScale = 0; // flag for no CFG
-                } else {
-                    float[][][] uncondEmbed = runTextEncoder(environment, textEncoder, uncondTokens);
-                    // Concatenate [uncond, cond] → [2, 77, 768]
-                    promptEmbedding = new float[2][textEmbed[0].length][textEmbed[0][0].length];
-                    System.arraycopy(uncondEmbed[0], 0, promptEmbedding[0], 0, uncondEmbed[0].length);
-                    System.arraycopy(textEmbed[0], 0, promptEmbedding[1], 0, textEmbed[0].length);
-                }
-
-                // Encode input image with VAE
-                request.reportProgress("Encoding input image with VAE\u2026");
-                OnnxTensor imgTensor = OnnxTensor.createTensor(environment, imageTensor);
-                Map<String, OnnxTensor> vaeEncIn = new HashMap<>();
-                vaeEncIn.put(resolveInputName(vaeEncoder, "sample", 0), imgTensor);
-                float[][][][] initLatents;
-                try (OrtSession.Result r = vaeEncoder.run(vaeEncIn)) {
-                    float[][][][] encoded = extractTensor4d(r);
-                    if (encoded == null) {
-                        return InferenceResult.fail("VAE encoder produced no output.");
-                    }
-                    // Scale by VAE scaling factor
-                    initLatents = scaleLatents(encoded, 0.18215f);
-                } finally {
-                    imgTensor.close();
-                }
-
-                // Calculate skip steps based on strength
-                int totalSteps;
-                int skipSteps;
-                if (turboMode) {
-                    totalSteps = Math.max(1, Math.min(request.batch() > 0 ? request.batch() : 4, 8));
-                    skipSteps = Math.max(0, (int) (totalSteps * (1.0 - strength)));
-                } else {
-                    totalSteps = Math.max(1, Math.min(request.batch() > 0 ? request.batch() : 20, 50));
-                    skipSteps = Math.max(0, (int) (totalSteps * (1.0 - strength)));
-                }
-                int activeSteps = totalSteps - skipSteps;
-
-                // Add noise to initial latents at strength level
-                request.reportProgress("Adding noise (strength=" + String.format("%.0f%%", strength * 100) + ")\u2026");
-                float[][][][] latents;
-                if (turboMode) {
-                    int[] timesteps = turboTimesteps(totalSteps);
-                    int startTs = timesteps[skipSteps];
-                    float sigma = turboSigma(startTs);
-                    // noise = random latent × sigma + initLatents
-                    float[][][][] noise = randomLatents(request.seed(), latentH, latentW);
-                    latents = addNoise(initLatents, noise, sigma);
-
-                    // Create mask in latent space if provided
-                    if (maskImage != null) {
-                        maskLatents = createLatentMask(maskImage, latentH, latentW);
-                    }
-
-                    long stepStart = System.currentTimeMillis();
-                    for (int i = skipSteps; i < timesteps.length; i++) {
-                        int t = timesteps[i];
-
-                        OnnxTensor sampleT = OnnxTensor.createTensor(environment, latents);
-                        OnnxTensor tsT = createTimestepTensor(environment, unet, t);
-                        OnnxTensor embedT = OnnxTensor.createTensor(environment, promptEmbedding);
-
-                        Map<String, OnnxTensor> unetInputs = new HashMap<>();
-                        unetInputs.put(resolveInputName(unet, "sample", 0), sampleT);
-                        unetInputs.put(resolveInputName(unet, "timestep", 1), tsT);
-                        unetInputs.put(resolveInputName(unet, "encoder_hidden_states", 2), embedT);
-
-                        float[][][][] noisePred;
-                        try (OrtSession.Result unetResult = unet.run(unetInputs)) {
-                            noisePred = extractTensor4d(unetResult);
-                        } finally {
-                            sampleT.close(); tsT.close(); embedT.close();
-                        }
-
-                        float sigmaT = turboSigma(t);
-                        float sigmaPrev = (i + 1 < timesteps.length) ? turboSigma(timesteps[i + 1]) : 0f;
-                        latents = eulerStep(latents, noisePred[0], sigmaT, sigmaPrev);
-
-                        // Apply mask: preserve original latents where mask is black (0)
-                        if (maskLatents != null) {
-                            latents = applyLatentMask(latents, initLatents, maskLatents);
-                        }
-
-                        long elapsed = System.currentTimeMillis() - stepStart;
-                        stepStart = System.currentTimeMillis();
-                        request.reportProgress("Denoising: " + (i - skipSteps + 1) + "/" + activeSteps
-                                + " steps (" + String.format("%.1f", elapsed / 1000.0) + "s/step) [Img2Img]");
-
-                        if (request.isCancelled()) {
-                            return InferenceResult.fail("Cancelled by user.");
-                        }
-                    }
-                } else {
-                    // SD v1.5 DDIM with img2img
-                    Path schedulerConfig = base.resolve("scheduler/scheduler_config.json");
-                    float[] alphaCumprod = loadAlphaCumprod(schedulerConfig);
-                    int[] fullTimesteps = ddimTimesteps(totalSteps, 1000);
-                    int[] timesteps = new int[activeSteps];
-                    System.arraycopy(fullTimesteps, skipSteps, timesteps, 0, activeSteps);
-
-                    float startAlpha = alphaCumprod[Math.min(timesteps[0], alphaCumprod.length - 1)];
-                    float startSigma = (float) Math.sqrt((1.0 - startAlpha) / startAlpha);
-                    float[][][][] noise = randomLatents(request.seed(), latentH, latentW);
-                    latents = addNoise(initLatents, noise, startSigma);
-
-                    if (maskImage != null) {
-                        maskLatents = createLatentMask(maskImage, latentH, latentW);
-                    }
-
-                    long stepStart = System.currentTimeMillis();
-                    for (int i = 0; i < timesteps.length; i++) {
-                        int t = timesteps[i];
-                        float[][][][] doubled = duplicateBatch(latents);
-                        OnnxTensor sampleT = OnnxTensor.createTensor(environment, doubled);
-                        OnnxTensor tsT = createTimestepTensor(environment, unet, t);
-                        OnnxTensor embedT = OnnxTensor.createTensor(environment,
-                                new float[][][][]{promptEmbedding});
-
-                        Map<String, OnnxTensor> unetInputs = new HashMap<>();
-                        unetInputs.put(resolveInputName(unet, "sample", 0), sampleT);
-                        unetInputs.put(resolveInputName(unet, "timestep", 1), tsT);
-                        unetInputs.put(resolveInputName(unet, "encoder_hidden_states", 2), embedT);
-
-                        float[][][][] noisePred;
-                        try (OrtSession.Result unetResult = unet.run(unetInputs)) {
-                            noisePred = extractTensor4d(unetResult);
-                        } finally {
-                            sampleT.close(); tsT.close(); embedT.close();
-                        }
-
-                        // CFG: split batch and guide
-                        float[][][] guidedNoise = guidance(noisePred[0], noisePred[1], (float) guidanceScale);
-
-                        // DDIM step
-                        int tPrev = (i + 1 < timesteps.length) ? timesteps[i + 1] : 0;
-                        float alphaT = alphaCumprod[Math.min(t, alphaCumprod.length - 1)];
-                        float alphaPrev = (tPrev > 0) ? alphaCumprod[Math.min(tPrev, alphaCumprod.length - 1)] : 1.0f;
-                        latents = ddimStep(latents, guidedNoise, alphaT, alphaPrev);
-
-                        // Apply mask
-                        if (maskLatents != null) {
-                            // Re-noise initial latents at current noise level for blending
-                            float currentSigma = (float) Math.sqrt((1.0 - alphaT) / alphaT);
-                            float[][][][] renaised = addNoise(initLatents, noise, currentSigma);
-                            latents = applyLatentMask(latents, renaised, maskLatents);
-                        }
-
-                        long elapsed = System.currentTimeMillis() - stepStart;
-                        stepStart = System.currentTimeMillis();
-                        request.reportProgress("Denoising: " + (i + 1) + "/" + activeSteps
-                                + " steps (" + String.format("%.1f", elapsed / 1000.0) + "s/step) [Img2Img]");
-
-                        if (request.isCancelled()) {
-                            return InferenceResult.fail("Cancelled by user.");
-                        }
-                    }
-                }
-
-                // VAE decode
-                request.reportProgress("Decoding latents with VAE\u2026");
-                float[][][][] scaledLatents = scaleLatents(latents, 1f / 0.18215f);
-                OnnxTensor latTensor = OnnxTensor.createTensor(environment, scaledLatents);
-                Map<String, OnnxTensor> vaeDecIn = new HashMap<>();
-                vaeDecIn.put(resolveInputName(vaeDecoder, "latent", 0), latTensor);
-                float[][][][] decoded;
-                try (OrtSession.Result vaeResult = vaeDecoder.run(vaeDecIn)) {
-                    decoded = extractTensor4d(vaeResult);
-                } finally {
-                    latTensor.close();
-                }
-                if (decoded == null || decoded.length == 0) {
-                    return InferenceResult.fail("VAE decoder output is empty.");
-                }
-
-                BufferedImage image = tensorToImage(decoded[0]);
-                String prefix = turboMode ? "img2img-turbo" : "img2img-sd15";
-                Path outputPath = writeOutputImage(image, prefix);
-                String mode = (maskImage != null) ? "Inpainting" : "Img2Img";
-                return InferenceResult.ok(
-                        mode + " result for: \"" + request.prompt() + "\"",
-                        mode + " (" + activeSteps + "/" + totalSteps + " steps, strength="
-                                + String.format("%.0f%%", strength * 100) + ") | EP=" + provider,
-                        outputPath.toString(), "image");
-            }
-        } catch (Exception ex) {
-            return InferenceResult.fail("Img2Img pipeline failed: " + ex.getMessage());
-        }
-    }
-
-    /** Convert BufferedImage to [1, 3, H, W] tensor normalized to [-1, 1]. */
-    private float[][][][] imageToLatentInput(BufferedImage image) {
-        int w = image.getWidth();
-        int h = image.getHeight();
-        float[][][][] tensor = new float[1][3][h][w];
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                int rgb = image.getRGB(x, y);
-                tensor[0][0][y][x] = ((rgb >> 16) & 0xFF) / 127.5f - 1.0f;
-                tensor[0][1][y][x] = ((rgb >> 8) & 0xFF) / 127.5f - 1.0f;
-                tensor[0][2][y][x] = (rgb & 0xFF) / 127.5f - 1.0f;
-            }
-        }
-        return tensor;
-    }
-
-    /** Add noise to latents: result = latents + noise × sigma. */
-    private float[][][][] addNoise(float[][][][] latents, float[][][][] noise, float sigma) {
-        int c = latents[0].length, h = latents[0][0].length, w = latents[0][0][0].length;
-        float[][][][] out = new float[1][c][h][w];
-        for (int ci = 0; ci < c; ci++)
-            for (int yi = 0; yi < h; yi++)
-                for (int xi = 0; xi < w; xi++)
-                    out[0][ci][yi][xi] = latents[0][ci][yi][xi] + noise[0][ci][yi][xi] * sigma;
-        return out;
-    }
-
-    /** Downsample mask to latent space [1, 1, latentH, latentW] with values 0..1. */
-    private float[][][][] createLatentMask(BufferedImage mask, int latentH, int latentW) {
-        // Simple nearest-neighbor downsample; white (255) = repaint area
-        int imgW = mask.getWidth(), imgH = mask.getHeight();
-        float[][][][] m = new float[1][1][latentH][latentW];
-        for (int y = 0; y < latentH; y++) {
-            for (int x = 0; x < latentW; x++) {
-                int srcX = x * imgW / latentW;
-                int srcY = y * imgH / latentH;
-                int rgb = mask.getRGB(srcX, srcY);
-                // Use luminance; white = 1.0 (repaint), black = 0.0 (keep)
-                float lum = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / (3f * 255f);
-                m[0][0][y][x] = lum;
-            }
-        }
-        return m;
-    }
-
-    /** Apply inpainting mask: where mask=1 keep denoised, where mask=0 keep original. */
-    private float[][][][] applyLatentMask(float[][][][] denoised, float[][][][] original,
-                                          float[][][][] mask) {
-        int c = denoised[0].length, h = denoised[0][0].length, w = denoised[0][0][0].length;
-        float[][][][] out = new float[1][c][h][w];
-        for (int ci = 0; ci < c; ci++)
-            for (int yi = 0; yi < h; yi++)
-                for (int xi = 0; xi < w; xi++) {
-                    float m = mask[0][0][yi][xi]; // 0..1
-                    out[0][ci][yi][xi] = denoised[0][ci][yi][xi] * m + original[0][ci][yi][xi] * (1f - m);
-                }
-        return out;
-    }
-
-    /** Generate DDIM timestep schedule (evenly spaced). */
-    private int[] ddimTimesteps(int numSteps, int maxTimestep) {
-        int[] ts = new int[numSteps];
-        for (int i = 0; i < numSteps; i++) {
-            ts[i] = (int) ((maxTimestep - 1) * (1.0 - (double) i / numSteps));
-        }
-        return ts;
-    }
-
+    /**
+     * Run the Real-ESRGAN upscaling pipeline.
+     * <p>
+     * Loads an input image, determines the model's native scale factor via a probe
+     * inference, optionally performs multi-pass upscaling, tiles large images to
+     * fit the model's fixed input size, and finally resizes to the target dimensions.
+     * </p>
+     *
+     * @param environment shared ONNX Runtime environment
+     * @param session     a loaded ONNX session for the Real-ESRGAN model
+     * @param request     the user's upscale request (input image, target size, style)
+     * @param provider    execution provider display name
+     * @return the result containing the upscaled image path, or a failure message
+     */
     private InferenceResult runRealEsrgan(OrtEnvironment environment, OrtSession session, InferenceRequest request, String provider) {
         String inputPath = request.inputImagePath();
         if (inputPath == null || inputPath.isBlank()) {
@@ -2055,6 +1909,17 @@ public class GenericOnnxService implements InferenceService {
         return dst;
     }
 
+    /**
+     * Compute the Lanczos kernel weight for a given distance x and kernel radius a.
+     * Lanczos-3 uses a=3; Lanczos-2 uses a=2.
+     * <p>
+     * weight(x) = sin(pi*x)/pi * sin(pi*x/a) / (pi*x/a)  for |x| < a, 0 otherwise.
+     * </p>
+     *
+     * @param x the distance from the sample point (may be fractional)
+     * @param a the Lanczos kernel radius (typically 2 or 3)
+     * @return the interpolation weight
+     */
     private static double lanczosWeight(double x, int a) {
         if (x == 0) { return 1.0; }
         if (Math.abs(x) >= a) { return 0.0; }
@@ -2062,10 +1927,24 @@ public class GenericOnnxService implements InferenceService {
         return (a * Math.sin(pix) * Math.sin(pix / a)) / (pix * pix);
     }
 
+    /**
+     * Clamp a double value to the [0, 255] range and round to the nearest integer.
+     * Used for converting floating-point pixel values to 8-bit RGB components.
+     *
+     * @param v the input value
+     * @return an integer in [0, 255]
+     */
     private static int clamp8(double v) {
         return Math.min(255, Math.max(0, (int) Math.round(v)));
     }
 
+    /**
+     * Convert a BufferedImage to a flat float array in NCHW (batch × channels × height × width) layout.
+     * Pixel values are normalised to [0, 1].
+     *
+     * @param image the source image
+     * @return a float array of length 3 * width * height, with channels stored as contiguous blocks
+     */
     private float[] imageToNchw(BufferedImage image) {
         int width = image.getWidth();
         int height = image.getHeight();
@@ -2090,6 +1969,14 @@ public class GenericOnnxService implements InferenceService {
         return tensor;
     }
 
+    /**
+     * Extract the first 4-D image tensor (batch × 3 × H × W) from an ONNX session result.
+     * Only the first batch element is returned, flattened to a 1-D float array.
+     *
+     * @param result the ONNX session output
+     * @return an ImageOutput record containing the pixel data, width, and height, or null if no suitable tensor is found
+     * @throws OrtException if tensor value extraction fails
+     */
     private ImageOutput extractFirstImageOutput(OrtSession.Result result) throws OrtException {
         for (Map.Entry<String, OnnxValue> entry : result) {
             OnnxValue value = entry.getValue();
@@ -2118,9 +2005,23 @@ public class GenericOnnxService implements InferenceService {
         return null;
     }
 
+    /**
+     * Holds the raw pixel data and dimensions of an image output from an ONNX model.
+     * The values array is flat NCHW (R block, G block, B block) of floats in [0, 1].
+     */
     private record ImageOutput(float[] values, int width, int height) {
     }
 
+    /**
+     * Run the CLIP text encoder and return the 3-D hidden states (embedding).
+     * Handles both INT32 and INT64 input types automatically by inspecting the model's metadata.
+     *
+     * @param environment the ONNX Runtime environment
+     * @param session     the loaded text encoder session
+     * @param tokenIds    tokenised prompt IDs (padded to the model's max length)
+     * @return the encoder output as [1, seqLen, hiddenDim]
+     * @throws OrtException if the ONNX Runtime call fails or the output is empty
+     */
     private float[][][] runTextEncoder(OrtEnvironment environment, OrtSession session, long[] tokenIds) throws OrtException {
         String inputName = resolveInputName(session, "input_ids", 0);
         TensorInfo inputInfo = (TensorInfo) session.getInputInfo().get(inputName).getInfo();
@@ -2148,10 +2049,19 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
+    /**
+     * Extract the first 3-D float tensor from an ONNX session result.
+     *
+     * @param result the ONNX session output
+     * @return the first [float[][][]] tensor found, or null if none exists
+     * @throws OrtException if tensor value extraction fails
+     */
     private float[][][] extractTensor3d(OrtSession.Result result) throws OrtException {
         for (Map.Entry<String, OnnxValue> entry : result) {
-            if (entry.getValue() instanceof OnnxTensor tensor) {
+            OnnxValue val = entry.getValue();
+            if (val instanceof OnnxTensor tensor) {
                 Object value = tensor.getValue();
+                val.close();
                 if (value instanceof float[][][] arr) {
                     return arr;
                 }
@@ -2160,10 +2070,19 @@ public class GenericOnnxService implements InferenceService {
         return null;
     }
 
+    /**
+     * Extract the first 4-D float tensor from an ONNX session result.
+     *
+     * @param result the ONNX session output
+     * @return the first [float[][][][]] tensor found, or null if none exists
+     * @throws OrtException if tensor value extraction fails
+     */
     private float[][][][] extractTensor4d(OrtSession.Result result) throws OrtException {
         for (Map.Entry<String, OnnxValue> entry : result) {
-            if (entry.getValue() instanceof OnnxTensor tensor) {
+            OnnxValue val = entry.getValue();
+            if (val instanceof OnnxTensor tensor) {
                 Object value = tensor.getValue();
+                val.close();
                 if (value instanceof float[][][][] arr) {
                     return arr;
                 }
@@ -2172,6 +2091,20 @@ public class GenericOnnxService implements InferenceService {
         return null;
     }
 
+    /**
+     * Find the actual input name of an ONNX model by matching a preferred substring.
+     * Falls back to positional index if no name contains the preferred string.
+     * <p>
+     * Different ONNX exports and model versions use slightly different input names
+     * (e.g. "input_ids" vs "input"), so this method performs a case-insensitive
+     * substring match rather than exact comparison.
+     * </p>
+     *
+     * @param session       the loaded ONNX session
+     * @param preferred     preferred input name substring to match (e.g. "input_ids")
+     * @param fallbackIndex positional index to use if no name matches the preferred string
+     * @return the matched input name
+     */
     private String resolveInputName(OrtSession session, String preferred, int fallbackIndex) {
         List<String> names = new ArrayList<>(session.getInputNames());
         for (String name : names) {
@@ -2185,6 +2118,16 @@ public class GenericOnnxService implements InferenceService {
         return names.get(0);
     }
 
+    /**
+     * Create an ONNX tensor for the timestep input, matching the model's expected data type
+     * (INT64, INT32, or FLOAT) by inspecting the session metadata.
+     *
+     * @param environment the ONNX Runtime environment
+     * @param session     the loaded ONNX session (used to sniff the input type)
+     * @param timestep    the scalar timestep value
+     * @return an OnnxTensor containing the timestep in the correct type
+     * @throws OrtException if tensor creation fails
+     */
     private OnnxTensor createTimestepTensor(OrtEnvironment environment, OrtSession session, int timestep) throws OrtException {
         String timestepName = resolveInputName(session, "timestep", 1);
         TensorInfo info = (TensorInfo) session.getInputInfo().get(timestepName).getInfo();
@@ -2194,6 +2137,15 @@ public class GenericOnnxService implements InferenceService {
         return OnnxTensor.createTensor(environment, new float[]{(float) timestep});
     }
 
+    /**
+     * Create a 4-D tensor of random Gaussian noise for the initial latent space.
+     * SD models typically use 4-channel latents (for v1.5/SDXL) or 16-channel (for SD 3.x).
+     *
+     * @param seed         random seed for reproducible generation
+     * @param latentHeight height of the latent grid (image height / 8)
+     * @param latentWidth  width of the latent grid (image width / 8)
+     * @return a [1][4][latentHeight][latentWidth] tensor filled with N(0,1) noise
+     */
     private float[][][][] randomLatents(long seed, int latentHeight, int latentWidth) {
         Random random = new Random(seed);
         float[][][][] values = new float[1][4][latentHeight][latentWidth];
@@ -2207,6 +2159,17 @@ public class GenericOnnxService implements InferenceService {
         return values;
     }
 
+    /**
+     * Load or compute the cumulative alpha schedule from a HuggingFace-style scheduler_config.json.
+     * <p>
+     * alpha_cumprod[t] = prod_{i=1}^{t} (1 - beta_i) — the fraction of signal remaining at timestep t.
+     * This is the noise schedule used by DDIM and similar schedulers.
+     * </p>
+     *
+     * @param schedulerConfigPath path to the scheduler_config.json file
+     * @return float array of alpha_cumprod values from t=0 to t=trainTimesteps-1
+     * @throws Exception if the JSON file cannot be read or parsed
+     */
     private float[] loadAlphaCumprod(Path schedulerConfigPath) throws Exception {
         Map<String, Object> config = OBJECT_MAPPER.readValue(schedulerConfigPath.toFile(), new TypeReference<>() {
         });
@@ -2223,7 +2186,15 @@ public class GenericOnnxService implements InferenceService {
         return alphaCumprod;
     }
 
-    /** Compute alpha_cumprod inline when scheduler_config.json is unavailable. */
+    /**
+     * Compute the alpha_cumprod schedule inline when scheduler_config.json is unavailable.
+     * Uses a linear beta schedule from betaStart to betaEnd over trainTimesteps.
+     *
+     * @param trainTimesteps total number of training timesteps (typically 1000)
+     * @param betaStart      initial beta value (default 0.00085)
+     * @param betaEnd        final beta value (default 0.012)
+     * @return float array of cumulative alpha values
+     */
     private float[] computeDefaultAlphaCumprod(int trainTimesteps, double betaStart, double betaEnd) {
         float[] alphaCumprod = new float[trainTimesteps];
         double cumulative = 1.0;
@@ -2235,6 +2206,14 @@ public class GenericOnnxService implements InferenceService {
         return alphaCumprod;
     }
 
+    /**
+     * Create an evenly-spaced schedule of timestep indices from (trainTimesteps-1) down to 0.
+     * Used by DDIM and other schedulers to select which noise levels to sample during denoising.
+     *
+     * @param steps          number of denoising steps requested
+     * @param trainTimesteps total timesteps the model was trained with (typically 1000)
+     * @return array of {@code steps} timestep indices in descending order
+     */
     private int[] createTimesteps(int steps, int trainTimesteps) {
         int[] timesteps = new int[steps];
         float stride = (float) (trainTimesteps - 1) / Math.max(1, steps - 1);
@@ -2244,6 +2223,14 @@ public class GenericOnnxService implements InferenceService {
         return timesteps;
     }
 
+    /**
+     * Duplicate a single latent sample into a batch of two (for classifier-free guidance).
+     * The two copies are identical — the UNet will process one with the unconditional embedding
+     * and one with the conditional (prompt) embedding.
+     *
+     * @param latents the original latent tensor [1][C][H][W]
+     * @return a batched tensor [2][C][H][W] with both copies identical
+     */
     private float[][][][] duplicateBatch(float[][][][] latents) {
         int channels = latents[0].length;
         int h = latents[0][0].length;
@@ -2258,6 +2245,18 @@ public class GenericOnnxService implements InferenceService {
         return out;
     }
 
+    /**
+     * Apply classifier-free guidance: steer the denoising process toward the conditional
+     * prediction by extrapolating away from the unconditional prediction.
+     * <p>
+     * Formula: out = uncond + guidanceScale * (cond - uncond)
+     * </p>
+     *
+     * @param uncond        UNet output for the unconditional (negative prompt) embedding
+     * @param cond          UNet output for the conditional (prompt) embedding
+     * @param guidanceScale how strongly to follow the prompt (7.5 is typical for SD v1.5)
+     * @return the guided noise prediction
+     */
     private float[][][] guidance(float[][][] uncond, float[][][] cond, float guidanceScale) {
         int c = uncond.length;
         int h = uncond[0].length;
@@ -2273,10 +2272,24 @@ public class GenericOnnxService implements InferenceService {
         return out;
     }
 
+    /**
+     * Single DDIM (Denoising Diffusion Implicit Model) step.
+     * <p>
+     * Predicts the clean image x0 from the current noisy latent xt, then mixes
+     * x0 and the predicted noise to produce xt-1. More stable than Euler for
+     * full diffusion schedules.
+     * </p>
+     *
+     * @param latents   current noisy latents [1][C][H][W]
+     * @param eps       predicted noise from the UNet
+     * @param alphaT    alpha_cumprod at the current timestep
+     * @param alphaPrev alpha_cumprod at the previous (earlier) timestep
+     * @return denoised latents for the next timestep
+     */
     private float[][][][] ddimStep(float[][][][] latents,
-                                   float[][][] eps,
-                                   float alphaT,
-                                   float alphaPrev) {
+                                    float[][][] eps,
+                                    float alphaT,
+                                    float alphaPrev) {
         int c = latents[0].length;
         int h = latents[0][0].length;
         int w = latents[0][0][0].length;
@@ -2299,6 +2312,15 @@ public class GenericOnnxService implements InferenceService {
         return out;
     }
 
+    /**
+     * Element-wise multiply all latent values by a constant scaling factor.
+     * Used for VAE scaling (dividing by the scaling factor before decoding) and for
+     * noise level scaling in Euler/DDIM steps.
+     *
+     * @param latents the input latent tensor
+     * @param scale   the scalar multiplier
+     * @return a new tensor with every element multiplied by {@code scale}
+     */
     private float[][][][] scaleLatents(float[][][][] latents, float scale) {
         float[][][][] out = new float[1][latents[0].length][latents[0][0].length][latents[0][0][0].length];
         for (int c = 0; c < latents[0].length; c++) {
@@ -2311,6 +2333,14 @@ public class GenericOnnxService implements InferenceService {
         return out;
     }
 
+    /**
+     * Convert a 3-D float tensor (channels × height × width) to a BufferedImage.
+     * Values are assumed to be in the range [-1, 1] — they are mapped to [0, 255] byte values.
+     *
+     * @param tensor the decoded image tensor [3][H][W] (R, G, B)
+     * @return a BufferedImage of TYPE_INT_RGB
+     * @throws IllegalStateException if the tensor has fewer than 3 channels
+     */
     private BufferedImage tensorToImage(float[][][] tensor) {
         int channels = tensor.length;
         int height = tensor[0].length;
@@ -2330,24 +2360,52 @@ public class GenericOnnxService implements InferenceService {
         return image;
     }
 
+    /**
+     * Convert a float value (expected in [-1, 1]) to an 8-bit RGB byte (0–255).
+     * First normalises to [0, 1], clips, then multiplies by 255.
+     *
+     * @param value the float pixel value (typically from a VAE decoder output)
+     * @return an integer in the range [0, 255]
+     */
     private int toRgbByte(float value) {
         float normalized = (value / 2f) + 0.5f;
         float clipped = Math.max(0f, Math.min(1f, normalized));
         return Math.round(clipped * 255f);
     }
 
+    /**
+     * Minimal CLIP BPE (Byte-Pair Encoding) tokenizer for Stable Diffusion text encoders.
+     * <p>
+     * Reads standard HuggingFace vocabulary (vocab.json) and merge (merges.txt) files.
+     * Implements GPT-2 style pre-tokenisation (splitting on contractions, letters, numbers,
+     * and punctuation), then applies BPE merge rules. Caches recent BPE results in an LRU
+     * cache to accelerate repeated calls.
+     * </p>
+     */
     private static final class ClipTokenizer {
+        /** Mapping from BPE token string to its integer ID in the vocabulary. */
         private final Map<String, Integer> vocab;
+        /** Ranking of BPE merge pairs; lower rank = merge sooner. */
         private final Map<String, Integer> merges;
+        /** Maps every byte (0–255) to a printable Unicode character for GPT-2 style encoding. */
         private final Map<Integer, String> byteEncoder;
+        /** LRU cache mapping raw token strings to their BPE-encoded form (max 10 000 entries). */
         private final Map<String, String> cache = new java.util.LinkedHashMap<>(256, 0.75f, true) {
             @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, String> eldest) {
                 return size() > 10_000;
             }
         };
+        /** Token ID for the beginning-of-sequence marker ("&lt;|startoftext|>"). */
         private final int bos;
+        /** Token ID for the end-of-sequence marker ("&lt;|endoftext|>"). */
         private final int eos;
 
+        /**
+         * Creates a new CLIP tokenizer from loaded vocabulary and merge-rank maps.
+         *
+         * @param vocab  mapping from BPE token string to integer ID
+         * @param merges mapping from merge pair ("a b") to its rank order
+         */
         private ClipTokenizer(Map<String, Integer> vocab, Map<String, Integer> merges) {
             this.vocab = vocab;
             this.merges = merges;
@@ -2356,6 +2414,14 @@ public class GenericOnnxService implements InferenceService {
             this.eos = vocab.getOrDefault("<|endoftext|>", 49407);
         }
 
+        /**
+         * Load a CLIP tokenizer from HuggingFace-style JSON vocabulary and text merges files.
+         *
+         * @param vocabPath  path to vocab.json
+         * @param mergesPath path to merges.txt
+         * @return a fully initialised ClipTokenizer
+         * @throws Exception if file reading or JSON parsing fails
+         */
         static ClipTokenizer load(Path vocabPath, Path mergesPath) throws Exception {
             Map<String, Integer> vocab = OBJECT_MAPPER.readValue(vocabPath.toFile(), new TypeReference<>() {
             });
@@ -2372,6 +2438,17 @@ public class GenericOnnxService implements InferenceService {
             return new ClipTokenizer(vocab, ranks);
         }
 
+        /**
+         * Encode a text string into token IDs, padded/truncated to maxLength.
+         * <p>
+         * Steps: lowercase → GPT-2 pre-tokenisation → byte-encoding → BPE merge → ID lookup.
+         * The output array is prefilled with EOS IDs and the sequence is capped at maxLength.
+         * </p>
+         *
+         * @param text      the input prompt text (may be null or empty)
+         * @param maxLength the maximum sequence length (typically 77 for SD models)
+         * @return a long array of token IDs, length = maxLength, padded with EOS
+         */
         long[] encode(String text, int maxLength) {
             List<Integer> ids = new ArrayList<>();
             ids.add(bos);
@@ -2404,6 +2481,17 @@ public class GenericOnnxService implements InferenceService {
             return out;
         }
 
+        /**
+         * Apply Byte-Pair Encoding to a single pre-tokenised string.
+         * <p>
+         * Iteratively merges the pair of adjacent symbols with the highest rank
+         * (lowest rank number) until no more merges apply. Results are cached
+         * in an LRU cache for faster repeated lookups.
+         * </p>
+         *
+         * @param token the byte-encoded token string
+         * @return the BPE-encoded string with spaces between sub-word pieces
+         */
         private String bpe(String token) {
             String cached = cache.get(token);
             if (cached != null) {
@@ -2459,6 +2547,13 @@ public class GenericOnnxService implements InferenceService {
             return out;
         }
 
+        /**
+         * Generate the set of all adjacent symbol pairs in a word.
+         * Each pair is represented as "first second" (space-separated).
+         *
+         * @param word the list of BPE symbols forming the current word
+         * @return a set of all adjacent pair strings
+         */
         private Set<String> getPairs(List<String> word) {
             Set<String> pairs = new HashSet<>();
             for (int i = 0; i < word.size() - 1; i++) {
@@ -2467,6 +2562,16 @@ public class GenericOnnxService implements InferenceService {
             return pairs;
         }
 
+        /**
+         * Build a mapping from every byte (0–255) to a printable Unicode character.
+         * <p>
+         * This is the GPT-2 byte-to-Unicode encoding: printable ASCII and Latin-1
+         * characters map to themselves, and the remaining bytes are mapped to
+         * characters in the Unicode private-use range starting at U+0100.
+         * </p>
+         *
+         * @return a map from byte value (0–255) to its single-character Unicode string
+         */
         private static Map<Integer, String> bytesToUnicode() {
             List<Integer> bs = new ArrayList<>();
             for (int i = '!'; i <= '~'; i++) {
@@ -2518,13 +2623,29 @@ public class GenericOnnxService implements InferenceService {
     @SuppressWarnings("unchecked")
     private static final class T5Tokenizer {
 
+        /** Mapping from text piece (e.g. "▁the") to its integer token ID. */
         private final Map<String, Integer> pieceToId;
+        /** Log-probability score for each vocabulary piece (higher = more likely). */
         private final float[] scores;
+        /** Token ID for padding ("&lt;pad&gt;", typically 0). */
         private final int padId;
+        /** Token ID for end-of-sequence ("&lt;/s&gt;", typically 1). */
         private final int eosId;
+        /** Token ID for unknown characters (typically 2). */
         private final int unkId;
+        /** Length of the longest piece string in the vocabulary, used to bound Viterbi search. */
         private final int maxPieceLen;
 
+        /**
+         * Creates a new T5 Unigram tokenizer from a loaded vocabulary.
+         *
+         * @param pieceToId  mapping from text piece to integer ID
+         * @param scores     log-probability scores for each piece in the vocabulary
+         * @param padId      token ID for padding ("&lt;pad&gt;")
+         * @param eosId      token ID for end-of-sequence ("&lt;/s&gt;")
+         * @param unkId      token ID for unknown characters
+         * @param maxPieceLen length of the longest piece in the vocabulary (for Viterbi bounds)
+         */
         private T5Tokenizer(Map<String, Integer> pieceToId, float[] scores,
                             int padId, int eosId, int unkId, int maxPieceLen) {
             this.pieceToId = pieceToId;
@@ -2760,7 +2881,58 @@ public class GenericOnnxService implements InferenceService {
      * @return {@code null} if the provider was enabled successfully,
      *         or a human-readable reason string if it could not be enabled.
      */
-    private String tryEnableProvider(OrtSession.SessionOptions options, String candidate, StringBuilder notes) {
+    /**
+     * Best-effort enable CPU memory arena and memory pattern optimization
+     * via reflection (available in newer ORT Java bindings).
+     */
+    private static void tryEnableMemoryOptimizations(OrtSession.SessionOptions opts) {
+        try {
+            opts.getClass().getMethod("setMemoryPatternOptimization", boolean.class)
+                    .invoke(opts, true);
+        } catch (Exception ignored) { }
+        try {
+            opts.getClass().getMethod("setEnableCpuMemArena", boolean.class)
+                    .invoke(opts, true);
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * Quick GPU provider probe — tries each candidate EP once and returns
+     * the first that succeeds, or empty string for CPU.
+     */
+    private static String tryProbeGpuProvider(OrtSession.SessionOptions opts, String os) {
+        List<String> candidates = new ArrayList<>();
+        if (os.contains("mac")) {
+            candidates.add("coreml");
+        } else if (os.contains("win")) {
+            candidates.add("tensorrt_rtx");
+            candidates.add("tensorrt");
+            candidates.add("cuda");
+            candidates.add("directml");
+        } else {
+            candidates.add("tensorrt");
+            candidates.add("cuda");
+            candidates.add("rocm");
+        }
+        StringBuilder notes = new StringBuilder();
+        for (String c : candidates) {
+            String fail = tryEnableProvider(opts, c, notes);
+            if (fail == null) return providerDisplayName(c);
+        }
+        return "";
+    }
+
+    /**
+     * Attempt to enable a single execution provider on the given session options.
+     * Uses reflection to call the appropriate {@code add<Provider>} method, so the code
+     * compiles and runs even when the native GPU libraries aren't on the classpath.
+     *
+     * @param options   the session options to configure
+     * @param candidate the provider name (e.g. "cuda", "coreml", "tensorrt")
+     * @param notes     StringBuilder to accumulate diagnostic notes about availability
+     * @return null if the provider was enabled successfully, or a human-readable failure reason
+     */
+    private static String tryEnableProvider(OrtSession.SessionOptions options, String candidate, StringBuilder notes) {
         String failDetail = null;
         try {
             boolean ok = switch (candidate) {
@@ -2784,6 +2956,12 @@ public class GenericOnnxService implements InferenceService {
                 case "coreml" -> {
                     // addCoreML(long flags) — note: parameter is long, not int!
                     // Flag 0x0 = ALL compute units (CPU+GPU+ANE — best for M-series)
+                    // TODO(future): Convert models with Apple's coremltools so all ops are
+                    //   CoreML-native. Currently only ~33% of UNet nodes run on CoreML and
+                    //   the text_encoder embedding (49408×768) exceeds CoreML's 16384-dim
+                    //   limit, forcing most of the graph to CPU. A coremltools-converted
+                    //   model would run fully on GPU/ANE with no CPU transfers and no
+                    //   ORT-level context leak.
                     boolean coreOk = invokeLongArg(options, "addCoreML", 0L);
                     if (!coreOk) { coreOk = invokeNoArg(options, "addCoreML"); }
                     yield coreOk;
@@ -2826,7 +3004,14 @@ public class GenericOnnxService implements InferenceService {
 
     /* ── Reflection helpers for EP registration ──────────────────────── */
 
-    private boolean invokeNoArg(OrtSession.SessionOptions options, String methodName) {
+    /**
+     * Invoke a no-arg method on SessionOptions via reflection.
+     *
+     * @param options    the SessionOptions instance
+     * @param methodName the method name to invoke (e.g. "addCUDA")
+     * @return true if the method was found and invoked without exception
+     */
+    private static boolean invokeNoArg(OrtSession.SessionOptions options, String methodName) {
         try {
             options.getClass().getMethod(methodName).invoke(options);
             return true;
@@ -2835,7 +3020,15 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private boolean invokeIntArg(OrtSession.SessionOptions options, String methodName, int arg) {
+    /**
+     * Invoke a method on SessionOptions that takes a single int argument, via reflection.
+     *
+     * @param options    the SessionOptions instance
+     * @param methodName the method name
+     * @param arg        the int argument to pass
+     * @return true if the method was found and invoked without exception
+     */
+    private static boolean invokeIntArg(OrtSession.SessionOptions options, String methodName, int arg) {
         try {
             options.getClass().getMethod(methodName, int.class).invoke(options, arg);
             return true;
@@ -2844,7 +3037,16 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private boolean invokeLongArg(OrtSession.SessionOptions options, String methodName, long arg) {
+    /**
+     * Invoke a method on SessionOptions that takes a single long argument, via reflection.
+     * Needed for CoreML EP which uses a long flags parameter.
+     *
+     * @param options    the SessionOptions instance
+     * @param methodName the method name (e.g. "addCoreML")
+     * @param arg        the long argument to pass
+     * @return true if the method was found and invoked without exception
+     */
+    private static boolean invokeLongArg(OrtSession.SessionOptions options, String methodName, long arg) {
         try {
             options.getClass().getMethod(methodName, long.class).invoke(options, arg);
             return true;
@@ -2853,7 +3055,16 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private boolean invokeStringArg(OrtSession.SessionOptions options, String methodName, String arg) {
+    /**
+     * Invoke a method on SessionOptions that takes a single String argument, via reflection.
+     * Used for OpenVINO EP which expects a device type string ("GPU" or "CPU").
+     *
+     * @param options    the SessionOptions instance
+     * @param methodName the method name (e.g. "addOpenVINO")
+     * @param arg        the String argument to pass
+     * @return true if the method was found and invoked without exception
+     */
+    private static boolean invokeStringArg(OrtSession.SessionOptions options, String methodName, String arg) {
         try {
             options.getClass().getMethod(methodName, String.class).invoke(options, arg);
             return true;
@@ -2862,7 +3073,13 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private String providerDisplayName(String candidate) {
+    /**
+     * Convert a short provider identifier to its ONNX Runtime execution provider display name.
+     *
+     * @param candidate the short name (e.g. "cuda", "coreml")
+     * @return the full EP class name (e.g. "CUDAExecutionProvider")
+     */
+    private static String providerDisplayName(String candidate) {
         return switch (candidate) {
             case "tensorrt_rtx" -> "NvTensorRtRtxExecutionProvider";
             case "tensorrt"     -> "TensorrtExecutionProvider";
@@ -2875,7 +3092,16 @@ public class GenericOnnxService implements InferenceService {
         };
     }
 
+    /**
+     * Result of selecting an execution provider: the provider display name and any
+     * diagnostic notes about what other providers were tried and why they failed.
+     */
     private record ProviderSelection(String provider, String notes) {
+        /**
+         * Returns a formatted suffix string for log messages, or empty if no notes exist.
+         *
+         * @return a string like " | cuda not available; ..." or ""
+         */
         String noteSuffix() {
             if (notes == null || notes.isBlank()) {
                 return "";
@@ -2884,6 +3110,15 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
+    /**
+     * Convert a flat NCHW float array (R, G, B blocks) to a BufferedImage.
+     * Values are expected in [0, 1] range and are clamped to [0, 1] before scaling to bytes.
+     *
+     * @param values flat float array of length 3 * width * height
+     * @param width  image width in pixels
+     * @param height image height in pixels
+     * @return a BufferedImage of TYPE_INT_RGB
+     */
     private BufferedImage nchwToImage(float[] values, int width, int height) {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         int redOffset = 0;
@@ -2904,11 +3139,26 @@ public class GenericOnnxService implements InferenceService {
         return image;
     }
 
+    /**
+     * Clamp a float value to [0, 1] and scale to an 8-bit byte [0, 255].
+     *
+     * @param value the input float (expected in [0, 1] range)
+     * @return an integer in [0, 255]
+     */
     private int clampToByte(float value) {
         float normalized = Math.max(0f, Math.min(1f, value));
         return Math.round(normalized * 255f);
     }
 
+    /**
+     * Write a BufferedImage to disk as a PNG file in the outputs/images directory.
+     * The filename includes the model prefix and a timestamp to avoid collisions.
+     *
+     * @param image  the image to save
+     * @param prefix model-specific prefix (e.g. "sd-v15", "sdxl-base")
+     * @return the absolute path to the saved PNG file
+     * @throws java.io.IOException if file creation or image writing fails
+     */
     private Path writeOutputImage(BufferedImage image, String prefix) throws java.io.IOException {
         Path outputDir = storage.root().resolve("outputs").resolve("images");
         java.nio.file.Files.createDirectories(outputDir);
@@ -2922,17 +3172,37 @@ public class GenericOnnxService implements InferenceService {
      * An OutputStream that writes to the original stderr AND forwards
      * complete lines to a progress callback (for ONNX Runtime log capture).
      */
+    /**
+     * An OutputStream that writes to the original stderr AND forwards
+     * complete lines to a progress callback (for ONNX Runtime log capture).
+     */
     private static class TeeOutputStream extends OutputStream {
+        /** Maximum bytes to accumulate before force-flushing a partial line (64 KB). */
         private static final int MAX_LINE_BUFFER = 64 * 1024; // 64 KB guard
+        /** The original stderr PrintStream that all output is also written to. */
         private final PrintStream original;
+        /** Consumer that receives each complete line for forwarding to the UI's Log tab. */
         private final Consumer<String> callback;
+        /** Buffer accumulating bytes until a newline is encountered. */
         private final ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream();
 
+        /**
+         * Creates a tee that duplicates writes to both the original stream and the callback.
+         *
+         * @param original the original stderr PrintStream
+         * @param callback consumer that receives each complete line
+         */
         TeeOutputStream(PrintStream original, Consumer<String> callback) {
             this.original = original;
             this.callback = callback;
         }
 
+        /**
+         * Write a single byte: forward to original stderr, buffer for line detection.
+         * When a newline byte ('\\n') is received, the buffered line is flushed to the callback.
+         *
+         * @param b the byte to write
+         */
         @Override
         public void write(int b) {
             original.write(b);
@@ -2944,6 +3214,14 @@ public class GenericOnnxService implements InferenceService {
             }
         }
 
+        /**
+         * Write a byte array: forward to original stderr, scan for newlines to flush lines.
+         * A 64 KB guard forces a partial flush if the buffer grows too large without a newline.
+         *
+         * @param buf the byte array
+         * @param off the start offset in the array
+         * @param len the number of bytes to write
+         */
         @Override
         public void write(byte[] buf, int off, int len) {
             original.write(buf, off, len);
@@ -2957,11 +3235,19 @@ public class GenericOnnxService implements InferenceService {
             }
         }
 
+        /**
+         * Flush the original stderr. Does NOT flush the line buffer (that happens on newlines).
+         */
         @Override
         public void flush() {
             original.flush();
         }
 
+        /**
+         * Flush the accumulated line buffer to the progress callback.
+         * Cleans up ONNX Runtime timestamp prefixes and filters noisy messages
+         * (e.g. "Context leak detected").
+         */
         private void flushLine() {
             String line = lineBuffer.toString(StandardCharsets.UTF_8).trim();
             lineBuffer.reset();
