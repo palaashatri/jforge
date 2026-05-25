@@ -149,7 +149,7 @@ public class TextToImagePanel extends JPanel {
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 20, 8, 20));
 
-        runButton = new JButton("Generate");
+        runButton = new JButton("Imagine");
         cancelButton = new JButton("Cancel");
         cancelButton.setEnabled(false);
         cancelButton.setToolTipText("Cancel the current generation");
@@ -224,7 +224,7 @@ public class TextToImagePanel extends JPanel {
         heightField.setToolTipText("Output height in pixels (multiple of 8)");
         stylePresetBox.setToolTipText("Optional style modifier for the prompt");
         stepsSpinner.setToolTipText("Fewer steps = faster but lower quality. 10\u201320 recommended.");
-        runButton.setToolTipText("Generate image (\u2318Enter)");
+        runButton.setToolTipText("Imagine (\u2318Enter)");
         saveButton.setToolTipText("Save output image (\u2318S)");
 
         if (models.isEmpty()) {
@@ -428,7 +428,7 @@ public class TextToImagePanel extends JPanel {
         running = busy;
         runButton.setEnabled(!busy);
         cancelButton.setEnabled(busy);
-        runButton.setText(busy ? message : "Generate");
+        runButton.setText(busy ? message : "Imagine");
         statusLabel.setText(message);
         progressBar.setVisible(busy);
         if (busy) {

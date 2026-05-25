@@ -2,8 +2,7 @@ package atri.palaash.jforge.model;
 
 public enum TaskType {
     TEXT_TO_IMAGE("Text → Image"),
-    IMAGE_UPSCALE("Image Upscale"),
-    IMAGE_TO_IMAGE("Image → Image");
+    IMAGE_UPSCALE("Image Upscale");
 
     private final String displayName;
 

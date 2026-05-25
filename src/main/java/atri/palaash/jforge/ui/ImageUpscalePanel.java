@@ -149,7 +149,7 @@ public class ImageUpscalePanel extends JPanel {
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 20, 8, 20));
 
-        runButton = new JButton("Upscale");
+        runButton = new JButton("Enhance");
         cancelButton = new JButton("Cancel");
         cancelButton.setEnabled(false);
         cancelButton.setToolTipText("Cancel the current upscale operation");
@@ -199,7 +199,7 @@ public class ImageUpscalePanel extends JPanel {
         browseButton.setToolTipText("Select an image file to upscale");
         outputResolutionBox.setToolTipText("Target output resolution");
         resizeMethodBox.setToolTipText("Method used for resizing (ESRGAN Multi-Pass recommended)");
-        runButton.setToolTipText("Upscale image (\u2318Enter)");
+        runButton.setToolTipText("Enhance (\u2318Enter)");
         saveButton.setToolTipText("Save upscaled image (\u2318S)");
 
         if (models.isEmpty()) {
@@ -335,7 +335,7 @@ public class ImageUpscalePanel extends JPanel {
 
     private void browseInput() {
         JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Select Image to Upscale");
+        chooser.setDialogTitle("Select Image to Enhance");
         chooser.setFileFilter(new FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File f = chooser.getSelectedFile();
@@ -457,7 +457,7 @@ public class ImageUpscalePanel extends JPanel {
         running = busy;
         runButton.setEnabled(!busy);
         cancelButton.setEnabled(busy);
-        runButton.setText(busy ? message : "Upscale");
+        runButton.setText(busy ? message : "Enhance");
         statusLabel.setText(message);
         progressBar.setVisible(busy);
         if (busy) {

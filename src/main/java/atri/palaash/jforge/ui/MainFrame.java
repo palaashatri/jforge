@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
 /**
  * Main application window — Apple Human Interface Guidelines–inspired layout.
  * <ul>
- *   <li>Left sidebar with grouped navigation (Generate / Img2Img / Upscale) and Models at the bottom</li>
+ *   <li>Left sidebar with grouped navigation (Imagine / Enhance) and Models at the bottom</li>
  *   <li>Card-layout content area</li>
  *   <li>Menu bar: View, Inference, Tools</li>
  * </ul>
@@ -51,9 +51,8 @@ import java.util.stream.Collectors;
 public class MainFrame extends JFrame {
 
     /* Card names */
-    private static final String CARD_GENERATE = "Generate";
-    private static final String CARD_IMG2IMG  = "Img2Img";
-    private static final String CARD_UPSCALE  = "Upscale";
+    private static final String CARD_GENERATE = "Imagine";
+    private static final String CARD_UPSCALE  = "Enhance";
     private static final String CARD_MODELS   = "Models";
 
     private final CardLayout cardLayout = new CardLayout();
@@ -62,7 +61,6 @@ public class MainFrame extends JFrame {
     /* Lazy-created panels */
     private TextToImagePanel textToImagePanel;
     private ImageUpscalePanel imageUpscalePanel;
-    private Img2ImgPanel img2ImgPanel;
     private ModelManagerPanel modelManagerPanel;
 
     /* Factory state for lazy construction */
@@ -106,12 +104,11 @@ public class MainFrame extends JFrame {
 
         /* ── Content cards (lazy: only TextToImage now) ───────── */
         contentPanel.add(textToImagePanel, CARD_GENERATE);
-        contentPanel.add(new JPanel(), CARD_IMG2IMG);
         contentPanel.add(new JPanel(), CARD_UPSCALE);
         contentPanel.add(new JPanel(), CARD_MODELS);
 
         /* ── Sidebar ─────────────────────────────────────────────── */
-        String[] workflowItems = {CARD_GENERATE, CARD_IMG2IMG, CARD_UPSCALE};
+        String[] workflowItems = {CARD_GENERATE, CARD_UPSCALE};
         workflowList = new JList<>(workflowItems);
         workflowList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         workflowList.setFixedCellHeight(32);
@@ -234,19 +231,6 @@ public class MainFrame extends JFrame {
         return panel;
     }
 
-    private Img2ImgPanel createImg2ImgPanel() {
-        List<ModelDescriptor> img2imgModels = registry.allModels().stream()
-                .filter(m -> m.taskType() == TaskType.IMAGE_TO_IMAGE)
-                .collect(Collectors.toList());
-        Img2ImgPanel panel = new Img2ImgPanel(
-                img2imgModels, downloader, services.get(TaskType.IMAGE_TO_IMAGE));
-        panel.setModelStorage(storage);
-        panel.setOpenModelManager(goToModels);
-        panel.setGpuSupplier(() -> gpuEnabled);
-        panel.updateModels(img2imgModels);
-        return panel;
-    }
-
     private ModelManagerPanel createModelManagerPanel() {
         ModelManagerPanel panel = new ModelManagerPanel(registry, storage, downloader);
         panel.setOnModelsUpdated(() -> {
@@ -262,12 +246,6 @@ public class MainFrame extends JFrame {
                                 .filter(m -> m.taskType() == TaskType.IMAGE_UPSCALE)
                                 .collect(Collectors.toList()));
             }
-            if (img2ImgPanel != null) {
-                img2ImgPanel.updateModels(
-                        registry.allModels().stream()
-                                .filter(m -> m.taskType() == TaskType.IMAGE_TO_IMAGE)
-                                .collect(Collectors.toList()));
-            }
         });
         return panel;
     }
@@ -278,13 +256,6 @@ public class MainFrame extends JFrame {
     private Object getOrCreatePanel(String card) {
         return switch (card) {
             case CARD_GENERATE -> textToImagePanel;
-            case CARD_IMG2IMG -> {
-                if (img2ImgPanel == null) {
-                    img2ImgPanel = createImg2ImgPanel();
-                    contentPanel.add(img2ImgPanel, CARD_IMG2IMG);
-                }
-                yield img2ImgPanel;
-            }
             case CARD_UPSCALE -> {
                 if (imageUpscalePanel == null) {
                     imageUpscalePanel = createImageUpscalePanel();
@@ -325,20 +296,15 @@ public class MainFrame extends JFrame {
 
         viewMenu.addSeparator();
 
-        JMenuItem showGenerate = new JMenuItem("Generate");
-        showGenerate.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_1, menuMask));
-        showGenerate.addActionListener(e -> switchToCard(CARD_GENERATE, workflowList, 0));
-        viewMenu.add(showGenerate);
+        JMenuItem showImagine = new JMenuItem("Imagine");
+        showImagine.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_1, menuMask));
+        showImagine.addActionListener(e -> switchToCard(CARD_GENERATE, workflowList, 0));
+        viewMenu.add(showImagine);
 
-        JMenuItem showImg2Img = new JMenuItem("Img2Img");
-        showImg2Img.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_2, menuMask));
-        showImg2Img.addActionListener(e -> switchToCard(CARD_IMG2IMG, workflowList, 1));
-        viewMenu.add(showImg2Img);
-
-        JMenuItem showUpscale = new JMenuItem("Upscale");
-        showUpscale.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_3, menuMask));
-        showUpscale.addActionListener(e -> switchToCard(CARD_UPSCALE, workflowList, 2));
-        viewMenu.add(showUpscale);
+        JMenuItem showEnhance = new JMenuItem("Enhance");
+        showEnhance.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_2, menuMask));
+        showEnhance.addActionListener(e -> switchToCard(CARD_UPSCALE, workflowList, 1));
+        viewMenu.add(showEnhance);
 
         viewMenu.addSeparator();
 

@@ -156,28 +156,6 @@ public class ModelDownloader {
                             "tokenizer/merges.txt", "tokenizer/vocab.json",
                             "tokenizer_2/merges.txt", "tokenizer_2/vocab.json"
                     ), progressConsumer, writtenFiles);
-        } else if ("sd_v15_img2img".equals(descriptor.id())) {
-            // Img2Img reuses the SD v1.5 bundle + VAE encoder
-            downloadSdBundle(descriptor, "text-image/stable-diffusion-v15",
-                    List.of(
-                            "unet/model.onnx", "unet/weights.pb",
-                            "text_encoder/model.onnx",
-                            "vae_decoder/model.onnx",
-                            "vae_encoder/model.onnx",
-                            "scheduler/scheduler_config.json",
-                            "tokenizer/merges.txt", "tokenizer/special_tokens_map.json",
-                            "tokenizer/tokenizer_config.json", "tokenizer/vocab.json"
-                    ), progressConsumer, writtenFiles);
-        } else if ("sd_turbo_img2img".equals(descriptor.id())) {
-            // SD Turbo img2img — reuses SD Turbo bundle + VAE encoder from v1.5
-            downloadSdBundle(descriptor, "text-image/sd-turbo",
-                    List.of(
-                            "unet/model.onnx",
-                            "text_encoder/model.onnx",
-                            "vae_decoder/model.onnx",
-                            "tokenizer/merges.txt", "tokenizer/special_tokens_map.json",
-                            "tokenizer/tokenizer_config.json", "tokenizer/vocab.json"
-                    ), progressConsumer, writtenFiles);
         } else if ("sdxl_base_onnx".equals(descriptor.id())) {
             // SDXL Base 1.0 — dual text encoders, large UNet
             downloadSdBundle(descriptor, "text-image/sdxl-base",

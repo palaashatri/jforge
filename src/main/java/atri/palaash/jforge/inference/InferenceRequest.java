@@ -19,9 +19,7 @@ public record InferenceRequest(
 	String inputImagePath,
 	boolean preferGpu,
 	Consumer<String> progressCallback,
-	AtomicBoolean cancellationFlag,
-	double strength,         // img2img denoise strength (0.0–1.0, default 0.75)
-	String maskImagePath     // optional mask for inpainting (white = repaint)
+	AtomicBoolean cancellationFlag
 ) {
 	/** Convenience constructor without progress callback (backward compatible). */
 	public InferenceRequest(
@@ -30,7 +28,7 @@ public record InferenceRequest(
 			int width, int height, String style, boolean upscale,
 			String inputImagePath, boolean preferGpu) {
 		this(model, prompt, negativePrompt, promptWeight, seed, batch,
-				width, height, style, upscale, inputImagePath, preferGpu, null, null, 0.75, null);
+				width, height, style, upscale, inputImagePath, preferGpu, null, null);
 	}
 
 	/** Constructor with progress callback but no cancellation flag. */
@@ -42,20 +40,7 @@ public record InferenceRequest(
 			Consumer<String> progressCallback) {
 		this(model, prompt, negativePrompt, promptWeight, seed, batch,
 				width, height, style, upscale, inputImagePath, preferGpu,
-				progressCallback, null, 0.75, null);
-	}
-
-	/** Full constructor with cancellation flag (txt2img panels). */
-	public InferenceRequest(
-			ModelDescriptor model, String prompt, String negativePrompt,
-			double promptWeight, long seed, int batch,
-			int width, int height, String style, boolean upscale,
-			String inputImagePath, boolean preferGpu,
-			Consumer<String> progressCallback,
-			AtomicBoolean cancellationFlag) {
-		this(model, prompt, negativePrompt, promptWeight, seed, batch,
-				width, height, style, upscale, inputImagePath, preferGpu,
-				progressCallback, cancellationFlag, 0.75, null);
+				progressCallback, null);
 	}
 
 	/** Fire a progress message if a callback is set. */

@@ -9,8 +9,7 @@ Desktop Java Swing application for ONNX Runtime inference with intelligent GPU a
 
 ### Image Generation
 - **Text → Image**: Stable Diffusion v1.5, SD Turbo, SDXL Turbo, SDXL Base 1.0, SD 3.5 (MMDiT)
-- **Image → Image**: Img2Img with adjustable strength + inpainting
-- **Image Upscaling**: Real-ESRGAN 4× super-resolution with before/after preview
+- **Image Enhancement**: Real-ESRGAN 4× super-resolution with before/after preview
 - **Prompt library**: saved presets, tags, and search
 - Negative prompts + prompt weighting
 - Seed control + reproducibility
