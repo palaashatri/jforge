@@ -403,7 +403,7 @@ public class ModelManagerPanel extends JPanel {
 
     private static final class ModelTableModel extends AbstractTableModel {
 
-        private final String[] columns = {"Task", "Model", "Available", "Progress", "Source URL"};
+        private final String[] columns = {"Task", "Model", "Size", "Format", "Available", "Progress", "Source URL"};
         private final java.util.ArrayList<ModelDescriptor> rows;
         private final ModelStorage storage;
         private final Map<String, Integer> progressById = new HashMap<>();
@@ -465,11 +465,21 @@ public class ModelManagerPanel extends JPanel {
             return switch (columnIndex) {
                 case 0 -> descriptor.taskType().displayName();
                 case 1 -> descriptor.displayName();
-                case 2 -> availableById.getOrDefault(descriptor.id(), false) ? "Yes" : "No";
-                case 3 -> progressById.getOrDefault(descriptor.id(), 0) + "%";
-                case 4 -> descriptor.sourceUrl();
+                case 2 -> formatSize(descriptor.fileSizeBytes());
+                case 3 -> isPyTorchModel(descriptor) ? "PyTorch (requires conversion)" : "ONNX";
+                case 4 -> availableById.getOrDefault(descriptor.id(), false) ? "Yes" : "No";
+                case 5 -> progressById.getOrDefault(descriptor.id(), 0) + "%";
+                case 6 -> descriptor.sourceUrl();
                 default -> "";
             };
+        }
+
+        private static String formatSize(long bytes) {
+            if (bytes <= 0) return "?";
+            if (bytes >= 1_000_000_000) return String.format("%.1f GB", bytes / 1_000_000_000.0);
+            if (bytes >= 1_000_000) return String.format("%.0f MB", bytes / 1_000_000.0);
+            if (bytes >= 1_000) return String.format("%.0f KB", bytes / 1_000.0);
+            return bytes + " B";
         }
     }
 }

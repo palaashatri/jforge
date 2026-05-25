@@ -1,5 +1,9 @@
 package atri.palaash.jforge.storage;
 
+import ai.onnxruntime.OrtEnvironment;
+import ai.onnxruntime.OrtException;
+import ai.onnxruntime.OrtSession;
+
 import java.awt.Desktop;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -9,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 /**
  * Orchestrates PyTorch → ONNX model conversion using a managed Python
@@ -245,7 +251,11 @@ public class PyTorchToOnnxConverter {
 
         runConversionScript(venvPython, scriptPath, modelId, outputDir, mode, hfToken);
 
-        // 7. Post-conversion cleanup — reclaim disk space from intermediate caches
+        // 7. Post-conversion validation — load every .onnx file with ONNX Runtime
+        report("Validating converted model(s) with ONNX Runtime…");
+        validateOnnxFiles(outputDir);
+
+        // 8. Post-conversion cleanup — reclaim disk space from intermediate caches
         cleanupAfterConversion(modelId, venvPython);
 
         report("Conversion complete → " + outputDir);
@@ -386,6 +396,53 @@ public class PyTorchToOnnxConverter {
     }
 
     /**
+     * Validate all .onnx files in the output directory by loading each one
+     * into ONNX Runtime. Throws ConversionException if every file fails.
+     */
+    private void validateOnnxFiles(Path outputDir) {
+        List<Path> onnxFiles;
+        try (Stream<Path> walk = Files.walk(outputDir)) {
+            onnxFiles = walk.filter(p -> p.toString().endsWith(".onnx")).toList();
+        } catch (IOException e) {
+            report("Warning: could not scan output directory — " + e.getMessage());
+            return;
+        }
+
+        if (onnxFiles.isEmpty()) {
+            throw new ConversionException(
+                    "Conversion script finished but no .onnx files were found in " + outputDir);
+        }
+
+        int passed = 0;
+        int failed = 0;
+        OrtEnvironment env = OrtEnvironment.getEnvironment();
+
+        for (Path onnxPath : onnxFiles) {
+            String relative = outputDir.relativize(onnxPath).toString();
+            report("  Validating " + relative + "…");
+            try (OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+                 OrtSession session = env.createSession(onnxPath.toString(), opts)) {
+                report("  ✓ " + relative + " (" + session.getNumInputs() + " inputs, "
+                        + session.getNumOutputs() + " outputs)");
+                passed++;
+            } catch (OrtException e) {
+                report("  ✗ " + relative + " — " + e.getMessage());
+                failed++;
+            }
+        }
+
+        if (passed == 0 && failed > 0) {
+            throw new ConversionException(
+                    "All " + failed + " ONNX file(s) failed validation. Conversion is unusable.");
+        }
+        if (failed > 0) {
+            report("Validation: " + passed + " passed, " + failed + " failed (partial).");
+        } else {
+            report("Validation: all " + passed + " ONNX file(s) passed ✓");
+        }
+    }
+
+    /**
      * Run the conversion script and parse PROGRESS / ERROR lines from stdout.
      */
     private void runConversionScript(String python, Path script,
@@ -495,7 +552,7 @@ public class PyTorchToOnnxConverter {
             #!/usr/bin/env python3
             # JForge PyTorch → ONNX converter (embedded fallback)
             # Full version: scripts/convert_pytorch_to_onnx.py
-            import argparse, sys
+            import argparse, os, sys
             from pathlib import Path
 
             def p(pct, msg):
@@ -505,25 +562,38 @@ public class PyTorchToOnnxConverter {
                 print(f"ERROR: {msg}", flush=True)
                 sys.exit(1)
 
+            def setup_hf_token(token):
+                if token:
+                    os.environ["HF_TOKEN"] = token
+                    os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+                    try:
+                        from huggingface_hub import login
+                        login(token=token, add_to_git_credential=False)
+                        p(3, "Authenticated with Hugging Face.")
+                    except ImportError:
+                        p(3, "HF token set via environment variable.")
+
             def convert_diffusers(mid, out):
                 try:
                     from optimum.exporters.onnx import main_export
                 except ImportError:
                     err("optimum[exporters] not installed")
-                p(10, f"Exporting {mid}…")
-                for task in ("stable-diffusion-xl", "stable-diffusion"):
+                p(10, "Exporting " + mid + "…")
+                for task in ("stable-diffusion-3", "stable-diffusion-xl", "stable-diffusion"):
                     try:
-                        p(20, f"Trying task={task}…")
+                        p(20, "Trying task=" + task + "…")
                         main_export(model_name_or_path=mid, output=Path(out), task=task, fp16=False)
-                        p(100, f"Done (task={task})")
+                        p(100, "Done (task=" + task + ")")
                         return
                     except Exception as e:
-                        if "task" in str(e).lower() or "not supported" in str(e).lower():
+                        msg = str(e).lower()
+                        if "task" in msg or "not supported" in msg or "auto" in msg:
+                            p(20, "Task '" + task + "' not compatible — trying next…")
                             continue
                         err(str(e))
-                err("No compatible export task found")
+                err("No compatible export task found for " + mid)
 
-            def convert_generic(mp, out, shape):
+            def convert_generic(mp, out, shape_str):
                 try:
                     import torch, torch.onnx
                 except ImportError:
@@ -532,13 +602,16 @@ public class PyTorchToOnnxConverter {
                 try:
                     m = torch.load(mp, map_location="cpu", weights_only=False)
                 except Exception as e:
-                    err(f"Failed to load: {e}")
+                    err("Failed to load: " + str(e))
                 if isinstance(m, dict):
-                    err("state_dict only — use --mode diffusers for HF models")
+                    if "model" in m and hasattr(m["model"], "forward"):
+                        m = m["model"]
+                    else:
+                        err("state_dict only — use --mode diffusers for HF models")
                 if not hasattr(m, "forward"):
                     err("No forward() method")
                 m.eval()
-                s = [int(x) for x in shape.split(",")]
+                s = [int(x.strip()) for x in shape_str.split(",")]
                 op = Path(out) / "model.onnx"
                 op.parent.mkdir(parents=True, exist_ok=True)
                 p(50, "Running torch.onnx.export()…")
@@ -546,19 +619,32 @@ public class PyTorchToOnnxConverter {
                     torch.onnx.export(m, torch.randn(*s), str(op), export_params=True,
                                       opset_version=17, do_constant_folding=True,
                                       input_names=["modelInput"], output_names=["modelOutput"],
-                                      dynamic_axes={"modelInput":{0:"batch"}, "modelOutput":{0:"batch"}})
+                                      dynamic_axes={"modelInput":{0:"batch_size"},"modelOutput":{0:"batch_size"}})
                 except Exception as e:
-                    err(f"torch.onnx.export() failed: {e}")
+                    err("torch.onnx.export() failed: " + str(e))
+                size_mb = op.stat().st_size / (1024 * 1024)
+                p(85, "Wrote model.onnx (" + "{:.1f}".format(size_mb) + " MB)")
+                try:
+                    import onnx
+                    onnx.checker.check_model(onnx.load(str(op)))
+                    p(95, "ONNX checker: model is valid")
+                except ImportError:
+                    p(95, "Skipping ONNX validation (onnx package not installed)")
+                except Exception as e:
+                    p(95, "ONNX checker warning: " + str(e))
                 p(100, "Done")
 
             if __name__ == "__main__":
                 ap = argparse.ArgumentParser()
                 ap.add_argument("--model_id", required=True)
                 ap.add_argument("--output_dir", required=True)
-                ap.add_argument("--mode", default="diffusers")
+                ap.add_argument("--mode", default="diffusers", choices=["diffusers", "generic"])
                 ap.add_argument("--input_shape", default="1,3,224,224")
+                ap.add_argument("--hf_token", default="")
                 a = ap.parse_args()
                 Path(a.output_dir).mkdir(parents=True, exist_ok=True)
+                if a.hf_token:
+                    setup_hf_token(a.hf_token)
                 if a.mode == "diffusers":
                     convert_diffusers(a.model_id, a.output_dir)
                 else:

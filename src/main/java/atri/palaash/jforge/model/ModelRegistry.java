@@ -60,17 +60,20 @@ public class ModelRegistry {
         textToImage.add(new ModelDescriptor("sd_v15_onnx", "Stable Diffusion v1.5 ONNX", TaskType.TEXT_TO_IMAGE,
             "text-image/stable-diffusion-v15/unet/model.onnx",
             "https://huggingface.co/onnx-community/stable-diffusion-v1-5-ONNX/resolve/main/unet/model.onnx",
-            "Auto-downloads UNet ONNX from onnx-community/stable-diffusion-v1-5-ONNX."));
+            "Auto-downloads UNet ONNX from onnx-community/stable-diffusion-v1-5-ONNX.",
+            1_750_000_000L));
         textToImage.add(new ModelDescriptor("sdxl_base_onnx", "Stable Diffusion XL Base 1.0 ONNX", TaskType.TEXT_TO_IMAGE,
             "text-image/sdxl-base/unet/model.onnx",
             "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/unet/model.onnx",
-            "Auto-downloads SDXL Base 1.0 ONNX from stabilityai. Dual text encoders, 1024×1024 native."));
+            "Auto-downloads SDXL Base 1.0 ONNX from stabilityai. Dual text encoders, 1024×1024 native.",
+            6_900_000_000L));
 
         List<ModelDescriptor> imageUpscale = new ArrayList<>();
         imageUpscale.add(new ModelDescriptor("realesrgan", "Real-ESRGAN ONNX", TaskType.IMAGE_UPSCALE,
             "text-image/realesrgan/model.onnx",
             "https://huggingface.co/imgdesignart/realesrgan-x4-onnx/resolve/main/onnx/model.onnx",
-            "Auto-downloads Real-ESRGAN ONNX model."));
+            "Auto-downloads Real-ESRGAN ONNX model.",
+            62_000_000L));
 
         byTask.put(TaskType.TEXT_TO_IMAGE, textToImage);
         byTask.put(TaskType.IMAGE_UPSCALE, imageUpscale);
@@ -79,14 +82,17 @@ public class ModelRegistry {
         downloadableAssets.add(new ModelDescriptor("sd_v15_text_encoder", "SD v1.5 Text Encoder ONNX", TaskType.TEXT_TO_IMAGE,
             "text-image/stable-diffusion-v15/text_encoder/model.onnx",
             "https://huggingface.co/onnx-community/stable-diffusion-v1-5-ONNX/resolve/main/text_encoder/model.onnx",
-            "Pipeline component asset for SD v1.5."));
+            "Pipeline component asset for SD v1.5.",
+            340_000_000L));
         downloadableAssets.add(new ModelDescriptor("sd_v15_vae_decoder", "SD v1.5 VAE Decoder ONNX", TaskType.TEXT_TO_IMAGE,
             "text-image/stable-diffusion-v15/vae_decoder/model.onnx",
             "https://huggingface.co/onnx-community/stable-diffusion-v1-5-ONNX/resolve/main/vae_decoder/model.onnx",
-            "Pipeline component asset for SD v1.5."));
+            "Pipeline component asset for SD v1.5.",
+            335_000_000L));
         downloadableAssets.add(new ModelDescriptor("sd_v15_safety_checker", "SD v1.5 Safety Checker ONNX", TaskType.TEXT_TO_IMAGE,
             "text-image/stable-diffusion-v15/safety_checker/model.onnx",
             "https://huggingface.co/onnx-community/stable-diffusion-v1-5-ONNX/resolve/main/safety_checker/model.onnx",
-            "Optional safety checker component."));
+            "Optional safety checker component.",
+            52_000_000L));
     }
 }

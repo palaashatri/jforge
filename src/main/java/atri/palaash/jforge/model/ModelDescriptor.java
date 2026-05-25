@@ -6,6 +6,12 @@ public record ModelDescriptor(
         TaskType taskType,
         String relativePath,
         String sourceUrl,
-        String notes
+        String notes,
+        long fileSizeBytes
 ) {
+
+    public ModelDescriptor(String id, String displayName, TaskType taskType,
+                           String relativePath, String sourceUrl, String notes) {
+        this(id, displayName, taskType, relativePath, sourceUrl, notes, 0);
+    }
 }

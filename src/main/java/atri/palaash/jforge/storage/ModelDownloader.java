@@ -3,6 +3,9 @@ package atri.palaash.jforge.storage;
 import atri.palaash.jforge.model.ModelDescriptor;
 import atri.palaash.jforge.model.TaskType;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -417,7 +420,8 @@ public class ModelDownloader {
                         discovered.add(new ModelDescriptor(id,
                                 "HF: " + modelId + " (ESRGAN ONNX)",
                                 TaskType.IMAGE_UPSCALE, relativePath, sourceUrl,
-                                "Discovered ESRGAN/upscaler from Hugging Face."));
+                                "Discovered ESRGAN/upscaler from Hugging Face.",
+                                findFileSize(details, onnxFile)));
                     } else if (hasOnnxUnet && !isGated) {
                         // ONNX SD model with UNet
                         String sourceUrl = "https://huggingface.co/" + modelId + "/resolve/main/unet/model.onnx";
@@ -427,7 +431,8 @@ public class ModelDownloader {
                         String relativePath = "text-image/huggingface/" + modelId.replace('/', '-') + "/unet/model.onnx";
                         discovered.add(new ModelDescriptor(id, displayName,
                                 TaskType.TEXT_TO_IMAGE, relativePath, sourceUrl,
-                                "Discovered from Hugging Face ONNX listing."));
+                                "Discovered from Hugging Face ONNX listing.",
+                                findFileSize(details, "unet/model.onnx")));
                     } else if (hasOnnxTransformer && !isGated) {
                         // ONNX SD3-type model with transformer
                         String sourceUrl = "https://huggingface.co/" + modelId + "/resolve/main/transformer/model.onnx";
@@ -436,7 +441,8 @@ public class ModelDownloader {
                         String relativePath = "text-image/huggingface/" + modelId.replace('/', '-') + "/transformer/model.onnx";
                         discovered.add(new ModelDescriptor(id, displayName,
                                 TaskType.TEXT_TO_IMAGE, relativePath, sourceUrl,
-                                "Discovered SD 3.x-style ONNX model from Hugging Face."));
+                                "Discovered SD 3.x-style ONNX model from Hugging Face.",
+                                findFileSize(details, "transformer/model.onnx")));
                     } else if (isPyTorchOnly) {
                         // PyTorch model — needs conversion to ONNX
                         String sourceUrl = "hf-pytorch://" + modelId;
@@ -467,6 +473,30 @@ public class ModelDownloader {
             if (f.endsWith(".onnx")) return f;
         }
         return null;
+    }
+
+    /**
+     * Extract the file size (in bytes) for a given file within a HuggingFace
+     * model from the API JSON response. Returns 0 if not found.
+     */
+    private static long findFileSize(String detailsJson, String rfilename) {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(detailsJson);
+            JsonNode siblings = root.get("siblings");
+            if (siblings != null && siblings.isArray()) {
+                for (JsonNode sibling : siblings) {
+                    JsonNode name = sibling.get("rfilename");
+                    JsonNode size = sibling.get("size");
+                    if (name != null && size != null && rfilename.equals(name.asText())) {
+                        long s = size.asLong(0);
+                        return s > 0 ? s : 0;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return 0;
     }
 
     private Set<String> fetchCandidateModelIds() throws IOException, InterruptedException {
