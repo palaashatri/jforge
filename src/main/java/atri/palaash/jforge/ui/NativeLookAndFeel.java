@@ -19,6 +19,7 @@ import java.util.Locale;
 public final class NativeLookAndFeel {
 
     private static boolean darkMode;
+    private static Boolean systemDarkMode;
 
     private NativeLookAndFeel() {
     }
@@ -125,6 +126,14 @@ public final class NativeLookAndFeel {
 
     /** Best-effort detection of the OS-level dark mode setting. */
     public static boolean isSystemDarkMode() {
+        if (systemDarkMode != null) {
+            return systemDarkMode;
+        }
+        systemDarkMode = detectSystemDarkMode();
+        return systemDarkMode;
+    }
+
+    private static boolean detectSystemDarkMode() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
 
         if (os.contains("mac")) {

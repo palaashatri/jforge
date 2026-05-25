@@ -10,9 +10,9 @@ import atri.palaash.jforge.storage.ModelStorage;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.DefaultListCellRenderer;
 import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JFrame;
+import javax.swing.ListCellRenderer;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JMenu;
@@ -59,10 +59,17 @@ public class MainFrame extends JFrame {
     private final CardLayout cardLayout = new CardLayout();
     private final JPanel contentPanel = new JPanel(cardLayout);
 
-    private final TextToImagePanel textToImagePanel;
-    private final ImageUpscalePanel imageUpscalePanel;
-    private final Img2ImgPanel img2ImgPanel;
-    private final ModelManagerPanel modelManagerPanel;
+    /* Lazy-created panels */
+    private TextToImagePanel textToImagePanel;
+    private ImageUpscalePanel imageUpscalePanel;
+    private Img2ImgPanel img2ImgPanel;
+    private ModelManagerPanel modelManagerPanel;
+
+    /* Factory state for lazy construction */
+    private final ModelRegistry registry;
+    private final ModelStorage storage;
+    private final ModelDownloader downloader;
+    private final Map<TaskType, InferenceService> services;
     private final JLabel statusBarLabel;
 
     /* Sidebar lists */
@@ -72,10 +79,17 @@ public class MainFrame extends JFrame {
     /* GPU state (shared across panels via supplier) */
     private boolean gpuEnabled = true;
 
+    /* Shared Runnable for navigating to Models panel */
+    private final Runnable goToModels;
+
     public MainFrame(ModelRegistry registry,
                      ModelStorage storage,
                      ModelDownloader downloader,
                      Map<TaskType, InferenceService> services) {
+        this.registry = registry;
+        this.storage = storage;
+        this.downloader = downloader;
+        this.services = services;
 
         setTitle("JForge");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -83,68 +97,20 @@ public class MainFrame extends JFrame {
         setMinimumSize(new Dimension(800, 540));
         setLocationRelativeTo(null);
 
-        /* ── Panels ──────────────────────────────────────────────── */
-        List<ModelDescriptor> t2iModels = registry.allModels().stream()
-                .filter(m -> m.taskType() == TaskType.TEXT_TO_IMAGE)
-                .collect(Collectors.toList());
-        List<ModelDescriptor> upscaleModels = registry.allModels().stream()
-                .filter(m -> m.taskType() == TaskType.IMAGE_UPSCALE)
-                .collect(Collectors.toList());
-        List<ModelDescriptor> img2imgModels = registry.allModels().stream()
-                .filter(m -> m.taskType() == TaskType.IMAGE_TO_IMAGE)
-                .collect(Collectors.toList());
-
-        textToImagePanel = new TextToImagePanel(
-                t2iModels, downloader, services.get(TaskType.TEXT_TO_IMAGE));
-        imageUpscalePanel = new ImageUpscalePanel(
-                upscaleModels, downloader, services.get(TaskType.IMAGE_UPSCALE));
-        img2ImgPanel = new Img2ImgPanel(
-                img2imgModels, downloader, services.get(TaskType.IMAGE_TO_IMAGE));
-
-        /* Inject storage so panels filter to downloaded-only models */
-        Runnable goToModels = () -> {
+        this.goToModels = () -> {
             if (managementList != null) switchToCard(CARD_MODELS, managementList, 0);
         };
-        textToImagePanel.setModelStorage(storage);
-        textToImagePanel.setOpenModelManager(goToModels);
-        imageUpscalePanel.setModelStorage(storage);
-        imageUpscalePanel.setOpenModelManager(goToModels);
-        img2ImgPanel.setModelStorage(storage);
-        img2ImgPanel.setOpenModelManager(goToModels);
 
-        textToImagePanel.setGpuSupplier(() -> gpuEnabled);
-        imageUpscalePanel.setGpuSupplier(() -> gpuEnabled);
-        img2ImgPanel.setGpuSupplier(() -> gpuEnabled);
+        /* ── Create only the initially-visible panel ───────────── */
+        textToImagePanel = createTextToImagePanel();
 
-        /* Apply initial downloaded-only filter */
-        textToImagePanel.updateModels(t2iModels);
-        imageUpscalePanel.updateModels(upscaleModels);
-        img2ImgPanel.updateModels(img2imgModels);
-
-        modelManagerPanel = new ModelManagerPanel(registry, storage, downloader);
-        modelManagerPanel.setOnModelsUpdated(() -> {
-            textToImagePanel.updateModels(
-                    registry.allModels().stream()
-                            .filter(m -> m.taskType() == TaskType.TEXT_TO_IMAGE)
-                            .collect(Collectors.toList()));
-            imageUpscalePanel.updateModels(
-                    registry.allModels().stream()
-                            .filter(m -> m.taskType() == TaskType.IMAGE_UPSCALE)
-                            .collect(Collectors.toList()));
-            img2ImgPanel.updateModels(
-                    registry.allModels().stream()
-                            .filter(m -> m.taskType() == TaskType.IMAGE_TO_IMAGE)
-                            .collect(Collectors.toList()));
-        });
-
-        /* ── Content cards ─────────────────────────────────────── */
+        /* ── Content cards (lazy: only TextToImage now) ───────── */
         contentPanel.add(textToImagePanel, CARD_GENERATE);
-        contentPanel.add(img2ImgPanel,     CARD_IMG2IMG);
-        contentPanel.add(imageUpscalePanel, CARD_UPSCALE);
-        contentPanel.add(modelManagerPanel, CARD_MODELS);
+        contentPanel.add(new JPanel(), CARD_IMG2IMG);
+        contentPanel.add(new JPanel(), CARD_UPSCALE);
+        contentPanel.add(new JPanel(), CARD_MODELS);
 
         /* ── Sidebar ─────────────────────────────────────────────── */
-        // Create both lists first, then wire listeners
         String[] workflowItems = {CARD_GENERATE, CARD_IMG2IMG, CARD_UPSCALE};
         workflowList = new JList<>(workflowItems);
         workflowList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -159,34 +125,30 @@ public class MainFrame extends JFrame {
         managementList.setCellRenderer(new SidebarRenderer());
         managementList.setOpaque(false);
 
-        // Wire listeners after all lists exist
         workflowList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting() && workflowList.getSelectedIndex() >= 0) {
                 managementList.clearSelection();
-                cardLayout.show(contentPanel, workflowList.getSelectedValue());
+                switchToCard(workflowList.getSelectedValue(), workflowList, workflowList.getSelectedIndex());
             }
         });
         managementList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting() && managementList.getSelectedIndex() >= 0) {
                 workflowList.clearSelection();
-                cardLayout.show(contentPanel, managementList.getSelectedValue());
+                switchToCard(managementList.getSelectedValue(), managementList, managementList.getSelectedIndex());
             }
         });
 
-        // Set initial selection after listeners are wired
         workflowList.setSelectedIndex(0);
 
         JPanel sidebarPanel = new JPanel(new BorderLayout(0, 0));
         sidebarPanel.setPreferredSize(new Dimension(170, 0));
         sidebarPanel.setBorder(new SeparatorBorder());
 
-        // Brand label
         JLabel brand = new JLabel("JForge");
         brand.setFont(brand.getFont().deriveFont(Font.BOLD, 13f));
         brand.setBorder(BorderFactory.createEmptyBorder(14, 20, 12, 20));
         sidebarPanel.add(brand, BorderLayout.NORTH);
 
-        // Workflow section
         JPanel workflowSection = new JPanel();
         workflowSection.setLayout(new BoxLayout(workflowSection, BoxLayout.Y_AXIS));
         workflowSection.setOpaque(false);
@@ -201,7 +163,6 @@ public class MainFrame extends JFrame {
         workflowList.setAlignmentX(Component.LEFT_ALIGNMENT);
         workflowSection.add(workflowList);
 
-        // Management section
         JPanel managementSection = new JPanel();
         managementSection.setLayout(new BoxLayout(managementSection, BoxLayout.Y_AXIS));
         managementSection.setOpaque(false);
@@ -215,16 +176,12 @@ public class MainFrame extends JFrame {
         managementList.setAlignmentX(Component.LEFT_ALIGNMENT);
         managementSection.add(managementList);
 
-        // Diagnostics section removed
-
-        // Bottom panel: management
         JPanel bottomSection = new JPanel();
         bottomSection.setLayout(new BoxLayout(bottomSection, BoxLayout.Y_AXIS));
         bottomSection.setOpaque(false);
         bottomSection.setBorder(BorderFactory.createEmptyBorder(0, 0, 12, 0));
         bottomSection.add(managementSection);
 
-        // Combine: workflow on top, management at bottom
         JPanel sidebarContent = new JPanel(new BorderLayout());
         sidebarContent.setOpaque(false);
         sidebarContent.add(workflowSection, BorderLayout.NORTH);
@@ -249,9 +206,101 @@ public class MainFrame extends JFrame {
 
         /* ── Menu bar ────────────────────────────────────────────── */
         setJMenuBar(buildMenuBar());
+    }
 
-        /* Select first card */
-        cardLayout.show(contentPanel, CARD_GENERATE);
+    private TextToImagePanel createTextToImagePanel() {
+        List<ModelDescriptor> t2iModels = registry.allModels().stream()
+                .filter(m -> m.taskType() == TaskType.TEXT_TO_IMAGE)
+                .collect(Collectors.toList());
+        TextToImagePanel panel = new TextToImagePanel(
+                t2iModels, downloader, services.get(TaskType.TEXT_TO_IMAGE));
+        panel.setModelStorage(storage);
+        panel.setOpenModelManager(goToModels);
+        panel.setGpuSupplier(() -> gpuEnabled);
+        panel.updateModels(t2iModels);
+        return panel;
+    }
+
+    private ImageUpscalePanel createImageUpscalePanel() {
+        List<ModelDescriptor> upscaleModels = registry.allModels().stream()
+                .filter(m -> m.taskType() == TaskType.IMAGE_UPSCALE)
+                .collect(Collectors.toList());
+        ImageUpscalePanel panel = new ImageUpscalePanel(
+                upscaleModels, downloader, services.get(TaskType.IMAGE_UPSCALE));
+        panel.setModelStorage(storage);
+        panel.setOpenModelManager(goToModels);
+        panel.setGpuSupplier(() -> gpuEnabled);
+        panel.updateModels(upscaleModels);
+        return panel;
+    }
+
+    private Img2ImgPanel createImg2ImgPanel() {
+        List<ModelDescriptor> img2imgModels = registry.allModels().stream()
+                .filter(m -> m.taskType() == TaskType.IMAGE_TO_IMAGE)
+                .collect(Collectors.toList());
+        Img2ImgPanel panel = new Img2ImgPanel(
+                img2imgModels, downloader, services.get(TaskType.IMAGE_TO_IMAGE));
+        panel.setModelStorage(storage);
+        panel.setOpenModelManager(goToModels);
+        panel.setGpuSupplier(() -> gpuEnabled);
+        panel.updateModels(img2imgModels);
+        return panel;
+    }
+
+    private ModelManagerPanel createModelManagerPanel() {
+        ModelManagerPanel panel = new ModelManagerPanel(registry, storage, downloader);
+        panel.setOnModelsUpdated(() -> {
+            if (textToImagePanel != null) {
+                textToImagePanel.updateModels(
+                        registry.allModels().stream()
+                                .filter(m -> m.taskType() == TaskType.TEXT_TO_IMAGE)
+                                .collect(Collectors.toList()));
+            }
+            if (imageUpscalePanel != null) {
+                imageUpscalePanel.updateModels(
+                        registry.allModels().stream()
+                                .filter(m -> m.taskType() == TaskType.IMAGE_UPSCALE)
+                                .collect(Collectors.toList()));
+            }
+            if (img2ImgPanel != null) {
+                img2ImgPanel.updateModels(
+                        registry.allModels().stream()
+                                .filter(m -> m.taskType() == TaskType.IMAGE_TO_IMAGE)
+                                .collect(Collectors.toList()));
+            }
+        });
+        return panel;
+    }
+
+    /**
+     * Ensure a lazily-created panel exists and is installed in the card layout.
+     */
+    private Object getOrCreatePanel(String card) {
+        return switch (card) {
+            case CARD_GENERATE -> textToImagePanel;
+            case CARD_IMG2IMG -> {
+                if (img2ImgPanel == null) {
+                    img2ImgPanel = createImg2ImgPanel();
+                    contentPanel.add(img2ImgPanel, CARD_IMG2IMG);
+                }
+                yield img2ImgPanel;
+            }
+            case CARD_UPSCALE -> {
+                if (imageUpscalePanel == null) {
+                    imageUpscalePanel = createImageUpscalePanel();
+                    contentPanel.add(imageUpscalePanel, CARD_UPSCALE);
+                }
+                yield imageUpscalePanel;
+            }
+            case CARD_MODELS -> {
+                if (modelManagerPanel == null) {
+                    modelManagerPanel = createModelManagerPanel();
+                    contentPanel.add(modelManagerPanel, CARD_MODELS);
+                }
+                yield modelManagerPanel;
+            }
+            default -> throw new IllegalArgumentException("Unknown card: " + card);
+        };
     }
 
     /* ================================================================== */
@@ -329,6 +378,7 @@ public class MainFrame extends JFrame {
     /* ================================================================== */
 
     private void switchToCard(String card, JList<String> targetList, int index) {
+        getOrCreatePanel(card);
         cardLayout.show(contentPanel, card);
         if (targetList != workflowList) workflowList.clearSelection();
         if (targetList != managementList) managementList.clearSelection();
@@ -349,36 +399,34 @@ public class MainFrame extends JFrame {
     /*  Sidebar renderer — HIG-inspired with rounded selection             */
     /* ================================================================== */
 
-    private static class SidebarRenderer extends DefaultListCellRenderer {
-        @Override
-        public Component getListCellRendererComponent(JList<?> list, Object value,
-                                                       int index, boolean isSelected,
-                                                       boolean cellHasFocus) {
-            JLabel lbl = (JLabel) super.getListCellRendererComponent(
-                    list, value, index, isSelected, cellHasFocus);
-            lbl.setFont(lbl.getFont().deriveFont(Font.PLAIN, 13f));
-            lbl.setOpaque(false);
-            lbl.setBorder(BorderFactory.createEmptyBorder(0, 20, 0, 20));
-            if (isSelected) {
-                lbl.setForeground(UIManager.getColor("List.selectionForeground"));
-            }
-            return new RoundedSelectionPanel(lbl, isSelected);
-        }
-    }
+    private static class SidebarRenderer extends JPanel implements ListCellRenderer<String> {
+        private final JLabel label = new JLabel();
+        private boolean selected;
 
-    /**
-     *  Wrapper panel that draws a rounded-rect selection highlight behind
-     *  the label — mimics the native macOS sidebar selection style.
-     */
-    private static class RoundedSelectionPanel extends JPanel {
-        private final boolean selected;
-        RoundedSelectionPanel(JLabel content, boolean selected) {
+        SidebarRenderer() {
             super(new BorderLayout());
-            this.selected = selected;
             setOpaque(false);
             setBorder(BorderFactory.createEmptyBorder(1, 8, 1, 8));
-            add(content, BorderLayout.CENTER);
+            label.setOpaque(false);
+            label.setBorder(BorderFactory.createEmptyBorder(0, 12, 0, 20));
+            add(label, BorderLayout.CENTER);
         }
+
+        @Override
+        public Component getListCellRendererComponent(JList<? extends String> list,
+                                                       String value, int index,
+                                                       boolean isSelected, boolean cellHasFocus) {
+            this.selected = isSelected;
+            label.setText(value);
+            label.setFont(list.getFont().deriveFont(Font.PLAIN, 13f));
+            if (isSelected) {
+                label.setForeground(UIManager.getColor("List.selectionForeground"));
+            } else {
+                label.setForeground(list.getForeground());
+            }
+            return this;
+        }
+
         @Override
         protected void paintComponent(Graphics g) {
             if (selected) {

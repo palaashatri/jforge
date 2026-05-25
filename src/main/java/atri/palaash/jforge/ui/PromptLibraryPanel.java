@@ -62,7 +62,11 @@ public class PromptLibraryPanel extends JPanel {
                 onApply.onApply(preset);
             }
         });
+    }
 
+    /** Lazily load presets from disk (call when tab becomes visible). */
+    public void load() {
+        if (!allPresets.isEmpty()) return;
         loadFromDisk();
     }
 

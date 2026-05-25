@@ -43,8 +43,9 @@ public class JForgeApp {
 
         Runtime.getRuntime().addShutdownHook(new Thread(workerPool::close));
 
+        NativeLookAndFeel.apply();
+
         SwingUtilities.invokeLater(() -> {
-            NativeLookAndFeel.apply();
             MainFrame frame = new MainFrame(registry, storage, downloader, services);
             frame.setVisible(true);
         });

@@ -10,8 +10,10 @@ import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JList;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -29,6 +31,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Desktop;
 import java.awt.Dimension;
@@ -126,15 +129,16 @@ public class Img2ImgPanel extends JPanel {
 
         /* ── Init components ─────────────────────────────────────── */
         modelCombo = new JComboBox<>(models.toArray(new ModelDescriptor[0]));
-        modelCombo.setRenderer((list, value, idx, sel, focus) -> {
-            JLabel lbl = new JLabel(value == null ? "" : value.displayName());
-            lbl.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-            if (sel) {
-                lbl.setBackground(list.getSelectionBackground());
-                lbl.setForeground(list.getSelectionForeground());
-                lbl.setOpaque(true);
+        modelCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value,
+                                                           int index, boolean isSelected,
+                                                           boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "" : ((ModelDescriptor) value).displayName());
+                setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+                return this;
             }
-            return lbl;
         });
         modelCombo.setToolTipText("Select the SD model to use for Img2Img");
 

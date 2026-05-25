@@ -10,8 +10,10 @@ import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JList;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -25,6 +27,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -104,20 +107,20 @@ public class ImageUpscalePanel extends JPanel {
 
         /* ---- init ---- */
         modelCombo = new JComboBox<>(models.toArray(new ModelDescriptor[0]));
-        modelCombo.setRenderer((list, value, idx, sel, focus) -> {
-            JLabel lbl = new JLabel(value == null ? "" : value.displayName());
-            lbl.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-            if (sel) {
-                lbl.setBackground(list.getSelectionBackground());
-                lbl.setForeground(list.getSelectionForeground());
-                lbl.setOpaque(true);
+        modelCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value,
+                                                           int index, boolean isSelected,
+                                                           boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "" : ((ModelDescriptor) value).displayName());
+                setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+                return this;
             }
-            return lbl;
         });
 
         inputFileLabel = new JLabel("No file selected");
         inputFileLabel.setFont(inputFileLabel.getFont().deriveFont(Font.PLAIN, 12f));
-        inputFileLabel.setForeground(new Color(130, 130, 130));
         browseButton = new JButton("Choose Image\u2026");
 
         outputResolutionBox = new JComboBox<>(new String[]{
@@ -144,7 +147,6 @@ public class ImageUpscalePanel extends JPanel {
 
         statusLabel = new JLabel("Ready");
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        statusLabel.setForeground(new Color(120, 120, 120));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 20, 8, 20));
 
         runButton = new JButton("Upscale");
@@ -322,7 +324,6 @@ public class ImageUpscalePanel extends JPanel {
         JPanel p = new JPanel(new BorderLayout(0, 4));
         JLabel t = new JLabel(title, JLabel.CENTER);
         t.setFont(t.getFont().deriveFont(Font.PLAIN, 11f));
-        t.setForeground(new Color(130, 130, 130));
         p.add(t, BorderLayout.NORTH);
         p.add(new JScrollPane(label), BorderLayout.CENTER);
         return p;

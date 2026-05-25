@@ -33,6 +33,11 @@ public class HistoryPanel extends JPanel {
         table.setFillsViewportHeight(true);
         table.setRowHeight(24);
         add(new JScrollPane(table), BorderLayout.CENTER);
+    }
+
+    /** Lazily load history from disk (call after panel becomes visible). */
+    public void load() {
+        if (!tableModel.rows.isEmpty()) return;
         loadFromDisk();
     }
 

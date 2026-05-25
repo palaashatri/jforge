@@ -10,8 +10,10 @@ import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JList;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -29,6 +31,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -109,15 +112,16 @@ public class TextToImagePanel extends JPanel {
 
         /* ---- init components ---- */
         modelCombo = new JComboBox<>(models.toArray(new ModelDescriptor[0]));
-        modelCombo.setRenderer((list, value, idx, sel, focus) -> {
-            JLabel lbl = new JLabel(value == null ? "" : value.displayName());
-            lbl.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
-            if (sel) {
-                lbl.setBackground(list.getSelectionBackground());
-                lbl.setForeground(list.getSelectionForeground());
-                lbl.setOpaque(true);
+        modelCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value,
+                                                           int index, boolean isSelected,
+                                                           boolean cellHasFocus) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                setText(value == null ? "" : ((ModelDescriptor) value).displayName());
+                setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+                return this;
             }
-            return lbl;
         });
 
         promptField = new JTextArea(3, 40);
@@ -143,7 +147,6 @@ public class TextToImagePanel extends JPanel {
 
         statusLabel = new JLabel("Ready");
         statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        statusLabel.setForeground(new Color(120, 120, 120));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(6, 20, 8, 20));
 
         runButton = new JButton("Generate");
@@ -300,6 +303,11 @@ public class TextToImagePanel extends JPanel {
         tabs.addTab("History", historyPanel);
         tabs.addTab("Library", promptLibraryPanel);
         tabs.addTab("Log", new JScrollPane(logArea));
+        tabs.addChangeListener(e -> {
+            int idx = tabs.getSelectedIndex();
+            if (idx == 1) historyPanel.load();
+            if (idx == 2) promptLibraryPanel.load();
+        });
         bottom.add(tabs, BorderLayout.CENTER);
 
         add(top, BorderLayout.NORTH);
@@ -616,7 +624,6 @@ public class TextToImagePanel extends JPanel {
     private static JLabel tinyLabel(String text) {
         JLabel lbl = new JLabel(text);
         lbl.setFont(lbl.getFont().deriveFont(Font.PLAIN, 11f));
-        lbl.setForeground(new Color(130, 130, 130));
         lbl.setBorder(BorderFactory.createEmptyBorder(0, 2, 2, 0));
         return lbl;
     }
