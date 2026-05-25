@@ -2956,6 +2956,12 @@ public class GenericOnnxService implements InferenceService {
                 case "coreml" -> {
                     // addCoreML(long flags) — note: parameter is long, not int!
                     // Flag 0x0 = ALL compute units (CPU+GPU+ANE — best for M-series)
+                    // TODO(future): Convert models with Apple's coremltools so all ops are
+                    //   CoreML-native. Currently only ~33% of UNet nodes run on CoreML and
+                    //   the text_encoder embedding (49408×768) exceeds CoreML's 16384-dim
+                    //   limit, forcing most of the graph to CPU. A coremltools-converted
+                    //   model would run fully on GPU/ANE with no CPU transfers and no
+                    //   ORT-level context leak.
                     boolean coreOk = invokeLongArg(options, "addCoreML", 0L);
                     if (!coreOk) { coreOk = invokeNoArg(options, "addCoreML"); }
                     yield coreOk;
