@@ -80,6 +80,16 @@ public class MainFrame extends JFrame {
     /* Shared Runnable for navigating to Models panel */
     private final Runnable goToModels;
 
+    /**
+     * Constructs the main application window with a sidebar, card-based content
+     * panel, menu bar, and status bar. Only the Text-to-Image panel is created
+     * eagerly; other panels are lazily constructed on first navigation.
+     *
+     * @param registry  the model registry containing all known model descriptors
+     * @param storage   the model storage backend for checking local availability
+     * @param downloader handles downloading models from remote sources
+     * @param services   map of task types to their inference services
+     */
     public MainFrame(ModelRegistry registry,
                      ModelStorage storage,
                      ModelDownloader downloader,
@@ -205,6 +215,12 @@ public class MainFrame extends JFrame {
         setJMenuBar(buildMenuBar());
     }
 
+    /**
+     * Creates and configures the Text-to-Image panel, wiring it to model storage,
+     * the model manager navigation callback, and the GPU supplier.
+     *
+     * @return a fully wired TextToImagePanel
+     */
     private TextToImagePanel createTextToImagePanel() {
         List<ModelDescriptor> t2iModels = registry.allModels().stream()
                 .filter(m -> m.taskType() == TaskType.TEXT_TO_IMAGE)
@@ -218,6 +234,12 @@ public class MainFrame extends JFrame {
         return panel;
     }
 
+    /**
+     * Lazily creates and configures the Image Upscale panel, wiring it to
+     * model storage, the model manager navigation callback, and the GPU supplier.
+     *
+     * @return a fully wired ImageUpscalePanel
+     */
     private ImageUpscalePanel createImageUpscalePanel() {
         List<ModelDescriptor> upscaleModels = registry.allModels().stream()
                 .filter(m -> m.taskType() == TaskType.IMAGE_UPSCALE)
@@ -231,6 +253,13 @@ public class MainFrame extends JFrame {
         return panel;
     }
 
+    /**
+     * Lazily creates and configures the Model Manager panel, registering a
+     * callback that refreshes the model lists in the other panels when models
+     * are added or removed.
+     *
+     * @return a fully wired ModelManagerPanel
+     */
     private ModelManagerPanel createModelManagerPanel() {
         ModelManagerPanel panel = new ModelManagerPanel(registry, storage, downloader);
         panel.setOnModelsUpdated(() -> {
@@ -278,6 +307,12 @@ public class MainFrame extends JFrame {
     /*  Menu bar                                                           */
     /* ================================================================== */
 
+    /**
+     * Builds the menu bar with View (dark mode, navigation), Inference (GPU toggle),
+     * and Tools (save preset, open logs) menus.
+     *
+     * @return the configured JMenuBar
+     */
     private JMenuBar buildMenuBar() {
         JMenuBar bar = new JMenuBar();
         int menuMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
@@ -343,6 +378,14 @@ public class MainFrame extends JFrame {
     /*  Navigation helpers                                                 */
     /* ================================================================== */
 
+    /**
+     * Switches the content panel to the named card, ensuring the panel is
+     * lazily created if needed, and updates sidebar selection.
+     *
+     * @param card       the card name (e.g. "Imagine", "Enhance", "Models")
+     * @param targetList the sidebar list to mark as selected
+     * @param index      the index to select in the target list
+     */
     private void switchToCard(String card, JList<String> targetList, int index) {
         getOrCreatePanel(card);
         cardLayout.show(contentPanel, card);
@@ -355,6 +398,10 @@ public class MainFrame extends JFrame {
     /*  L&F helpers                                                        */
     /* ================================================================== */
 
+    /**
+     * Refreshes the UI of all open windows after a look-and-feel change
+     * (e.g. toggling dark mode).
+     */
     private void repaintAll() {
         for (java.awt.Window w : java.awt.Window.getWindows()) {
             javax.swing.SwingUtilities.updateComponentTreeUI(w);
@@ -365,10 +412,17 @@ public class MainFrame extends JFrame {
     /*  Sidebar renderer — HIG-inspired with rounded selection             */
     /* ================================================================== */
 
+    /**
+     * Custom list cell renderer for the sidebar. Draws a rounded-rectangle
+     * selection background to match Apple HIG styling.
+     */
     private static class SidebarRenderer extends JPanel implements ListCellRenderer<String> {
         private final JLabel label = new JLabel();
         private boolean selected;
 
+        /**
+         * Constructs the renderer panel with a border layout and empty insets.
+         */
         SidebarRenderer() {
             super(new BorderLayout());
             setOpaque(false);
@@ -378,6 +432,17 @@ public class MainFrame extends JFrame {
             add(label, BorderLayout.CENTER);
         }
 
+        /**
+         * Configures the renderer component for each list cell, setting text and
+         * foreground color based on selection state.
+         *
+         * @param list         the JList being rendered
+         * @param value        the cell value (sidebar item name)
+         * @param index        the cell index
+         * @param isSelected   whether the cell is selected
+         * @param cellHasFocus whether the cell has keyboard focus
+         * @return this component configured for the cell
+         */
         @Override
         public Component getListCellRendererComponent(JList<? extends String> list,
                                                        String value, int index,
@@ -393,6 +458,12 @@ public class MainFrame extends JFrame {
             return this;
         }
 
+        /**
+         * Paints a rounded-rectangle selection background when the item is selected,
+         * before painting the normal component background.
+         *
+         * @param g the graphics context
+         */
         @Override
         protected void paintComponent(Graphics g) {
             if (selected) {
@@ -412,6 +483,12 @@ public class MainFrame extends JFrame {
     /*  Status bar EP detection                                            */
     /* ================================================================== */
 
+    /**
+     * Detects the available execution provider (GPU/CPU) and builds a status
+     * bar string showing the provider, CPU core count, heap size, and Java version.
+     *
+     * @return a formatted status string like "EP: CUDA | Cores: 8 | Heap: 4096 MB | Java 21"
+     */
     private String detectEpInfo() {
         String detected = atri.palaash.jforge.inference.GenericOnnxService.detectedProvider();
         String ep = detected.isBlank() ? (gpuEnabled ? "GPU unavailable, CPU" : "CPU") : detected;
@@ -425,16 +502,50 @@ public class MainFrame extends JFrame {
     /*  Separator border (top or right edge)                               */
     /* ================================================================== */
 
+    /**
+     * A thin one-pixel border used as a visual separator between layout sections.
+     * Draws a line on the top or right edge depending on configuration.
+     */
     private static class SeparatorBorder implements Border {
         private final boolean top;
+        /**
+         * Creates a right-edge separator (the default sidebar divider).
+         */
         SeparatorBorder() { this(false); }
+
+        /**
+         * Creates a separator on the specified edge.
+         *
+         * @param top true for a top-edge separator, false for a right-edge separator
+         */
         SeparatorBorder(boolean top) { this.top = top; }
+        /**
+         * Returns the insets: 1 pixel on the top or right edge, 0 elsewhere.
+         *
+         * @param c the component (unused)
+         * @return the border insets
+         */
         @Override public Insets getBorderInsets(Component c) {
             return top ? new Insets(1, 0, 0, 0) : new Insets(0, 0, 0, 1);
         }
+        /**
+         * Returns true since the border paints every pixel within its insets.
+         *
+         * @return true
+         */
         @Override public boolean isBorderOpaque() { return true; }
+        /**
+         * Paints a single-pixel line on the configured edge.
+         *
+         * @param c      the component
+         * @param g      the graphics context
+         * @param x      the x origin
+         * @param y      the y origin
+         * @param width  the component width
+         * @param height the component height
+         */
         @Override public void paintBorder(Component c, Graphics g,
-                                           int x, int y, int width, int height) {
+                                            int x, int y, int width, int height) {
             g.setColor(UIManager.getColor("Separator.foreground"));
             if (top) {
                 g.drawLine(x, y, x + width, y);

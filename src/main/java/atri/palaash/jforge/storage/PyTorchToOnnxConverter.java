@@ -44,6 +44,7 @@ public class PyTorchToOnnxConverter {
     private static final Path VENV_DIR = Path.of(
             System.getProperty("user.home"), ".jforge-models", ".converter-venv");
 
+    /** URL to the official Python download page, opened in the browser when Python is not found. */
     private static final String PYTHON_DOWNLOAD_URL = "https://www.python.org/downloads/";
 
     /** Packages installed into the venv before conversion. */
@@ -51,6 +52,7 @@ public class PyTorchToOnnxConverter {
             "torch", "onnx", "diffusers", "transformers", "accelerate", "optimum[exporters]"
     };
 
+    /** Callback that receives human-readable status messages during conversion. */
     private final Consumer<String> progressCallback;
 
     /**
@@ -70,6 +72,7 @@ public class PyTorchToOnnxConverter {
      *         or {@code null} if Python 3 is not installed
      */
     public static String findPython() {
+        // Try both "python3" and "python" commands on the system PATH
         for (String cmd : new String[]{"python3", "python"}) {
             try {
                 Process p = new ProcessBuilder(cmd, "--version")
@@ -335,10 +338,23 @@ public class PyTorchToOnnxConverter {
         return freed[0];
     }
 
+    /**
+     * Checks whether the virtual environment has been created and the
+     * Python binary exists inside it.
+     *
+     * @return {@code true} if the venv Python executable exists
+     */
     private boolean isVenvReady() {
         return Files.exists(getVenvPython());
     }
 
+    /**
+     * Returns the path to the Python executable inside the managed virtual
+     * environment. Handles platform differences: {@code Scripts/python.exe}
+     * on Windows, {@code bin/python3} (or {@code bin/python}) on macOS/Linux.
+     *
+     * @return the path to the venv Python executable
+     */
     private Path getVenvPython() {
         if (isWindows()) {
             return VENV_DIR.resolve("Scripts").resolve("python.exe");
@@ -349,10 +365,23 @@ public class PyTorchToOnnxConverter {
         return VENV_DIR.resolve("bin").resolve("python");
     }
 
+    /**
+     * Checks whether the current operating system is Windows.
+     * Used to determine the venv binary path and other platform-specific behavior.
+     *
+     * @return {@code true} if running on Windows
+     */
     private static boolean isWindows() {
         return System.getProperty("os.name").toLowerCase().contains("win");
     }
 
+    /**
+     * Runs {@code python --version} and returns the version string.
+     * Falls back to the command name itself if the call fails.
+     *
+     * @param pythonCmd the Python command name ({@code "python3"} or {@code "python"})
+     * @return the version string, or the command name on failure
+     */
     private String getPythonVersion(String pythonCmd) {
         try {
             Process p = new ProcessBuilder(pythonCmd, "--version")
@@ -363,6 +392,12 @@ public class PyTorchToOnnxConverter {
         }
     }
 
+    /**
+     * Sends a status message to the progress callback.
+     * If no callback was provided, the message is silently discarded.
+     *
+     * @param message the human-readable status message
+     */
     private void report(String message) {
         progressCallback.accept(message);
     }
@@ -431,10 +466,12 @@ public class PyTorchToOnnxConverter {
             }
         }
 
+        // If ALL files failed, the conversion is unusable — throw an error
         if (passed == 0 && failed > 0) {
             throw new ConversionException(
                     "All " + failed + " ONNX file(s) failed validation. Conversion is unusable.");
         }
+        // Partial acceptance: some files passed, some failed (e.g. non-critical components)
         if (failed > 0) {
             report("Validation: " + passed + " passed, " + failed + " failed (partial).");
         } else {
@@ -471,6 +508,7 @@ public class PyTorchToOnnxConverter {
                     new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
+                    // Parse the Python script's stdout protocol: "PROGRESS: <pct> <message>" or "ERROR: <message>"
                     if (line.startsWith("PROGRESS: ")) {
                         String payload = line.substring("PROGRESS: ".length());
                         int space = payload.indexOf(' ');

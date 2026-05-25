@@ -18,9 +18,12 @@ import java.util.Locale;
  */
 public final class NativeLookAndFeel {
 
+    /** Whether the dark theme is currently active. */
     private static boolean darkMode;
+    /** Cached OS-level dark-mode preference, or {@code null} if not yet probed. */
     private static Boolean systemDarkMode;
 
+    /** Utility class — prevent instantiation. */
     private NativeLookAndFeel() {
     }
 
@@ -30,6 +33,7 @@ public final class NativeLookAndFeel {
         applyTheme(darkMode);
     }
 
+    /** Returns {@code true} if the dark theme is currently active. */
     public static boolean isDarkMode() {
         return darkMode;
     }
@@ -47,15 +51,24 @@ public final class NativeLookAndFeel {
         }
     }
 
+    /** Flip between dark and light mode at runtime. */
     public static void toggleDarkMode() {
         setDarkMode(!darkMode);
     }
 
     /* ------------------------------------------------------------------ */
 
+    /**
+     * Install the FlatLaf look-and-feel for the requested mode.
+     * On macOS it first attempts the native FlatMac* themes and falls back
+     * to the standard FlatLaf themes if the Mac variants are not available.
+     *
+     * @param dark {@code true} for dark mode, {@code false} for light mode
+     */
     private static void applyTheme(boolean dark) {
         try {
             String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+            // macOS: try the platform-native FlatMac* themes for a more native feel
             if (os.contains("mac")) {
                 try {
                     String className = dark
@@ -68,6 +81,7 @@ public final class NativeLookAndFeel {
                     // Mac themes unavailable in this FlatLaf build — fall through.
                 }
             }
+            // Standard FlatLaf themes for non-macOS platforms or as fallback
             if (dark) {
                 FlatDarkLaf.setup();
             } else {
@@ -133,9 +147,19 @@ public final class NativeLookAndFeel {
         return systemDarkMode;
     }
 
+    /**
+     * Probe the operating system's dark-mode setting.
+     * <p>
+     * Checks macOS via the {@code AppleInterfaceStyle} defaults key, Windows
+     * via the registry theme key, Linux via the {@code GTK_THEME} environment
+     * variable, and finally a system property override ({@code jforge.theme}).
+     *
+     * @return {@code true} if the OS appears to be in dark mode
+     */
     private static boolean detectSystemDarkMode() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
 
+        // macOS: read the global "AppleInterfaceStyle" preference via the `defaults` command
         if (os.contains("mac")) {
             try {
                 Process process = new ProcessBuilder(
@@ -147,9 +171,12 @@ public final class NativeLookAndFeel {
                     return line != null && line.toLowerCase(Locale.ROOT).contains("dark");
                 }
             } catch (Exception ignored) {
+                // defaults command failed — probably not macOS or sandboxed
             }
         }
 
+        // Windows: query the "AppsUseLightTheme" registry value
+        // 0x0 means dark mode is enabled
         if (os.contains("win")) {
             try {
                 Process process = new ProcessBuilder(
@@ -163,15 +190,17 @@ public final class NativeLookAndFeel {
                     return output.contains("0x0");
                 }
             } catch (Exception ignored) {
+                // registry query failed — probably not Windows or access denied
             }
         }
 
-        // Linux / GTK
+        // Linux / GTK: check the GTK_THEME environment variable
         String gtkTheme = System.getenv("GTK_THEME");
         if (gtkTheme != null && gtkTheme.toLowerCase(Locale.ROOT).contains("dark")) {
             return true;
         }
 
+        // Last resort: allow the user to override via system property
         String override = System.getProperty("jforge.theme", "").toLowerCase(Locale.ROOT);
         return "dark".equals(override);
     }

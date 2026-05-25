@@ -16,12 +16,23 @@ import java.util.concurrent.Executors;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Tests for {@link GenericOnnxService}. Verifies correct failure handling for
+ * missing models and invalid ONNX files. Uses a temporary directory for model
+ * storage to avoid polluting the user's real model cache.
+ */
 class GenericOnnxServiceTest {
 
     private Path tempRoot;
     private ExecutorService executor;
     private ModelStorage storage;
 
+    /**
+     * Creates a temporary directory, a virtual-thread executor, and a
+     * ModelStorage pointing at the temp directory before each test.
+     *
+     * @throws IOException if the temp directory cannot be created
+     */
     @BeforeEach
     void setUp() throws IOException {
         tempRoot = Files.createTempDirectory("jforge-test-");
@@ -29,6 +40,12 @@ class GenericOnnxServiceTest {
         storage = new ModelStorage(tempRoot);
     }
 
+    /**
+     * Cleans up the executor and recursively deletes the temporary directory
+     * after each test.
+     *
+     * @throws IOException if directory cleanup fails
+     */
     @AfterEach
     void tearDown() throws IOException {
         if (executor != null) {
@@ -46,6 +63,12 @@ class GenericOnnxServiceTest {
         }
     }
 
+    /**
+     * Verifies that running inference with dummy (non-ONNX) model bytes
+     * returns a failed result with a non-blank error detail.
+     *
+     * @throws Exception if any unexpected error occurs
+     */
     @Test
     void failsForInvalidOnnxModelBytes() throws Exception {
         ModelDescriptor descriptor = createDummyModel(TaskType.TEXT_TO_IMAGE, "sd15", "models/sd15.onnx");
@@ -70,6 +93,10 @@ class GenericOnnxServiceTest {
         assertFalse(result.details().isBlank());
     }
 
+    /**
+     * Verifies that running inference with a model that has no file on disk
+     * returns a failed result whose detail mentions "Model not found locally".
+     */
     @Test
     void failsWhenModelIsMissing() {
         ModelDescriptor descriptor = new ModelDescriptor(
@@ -103,6 +130,16 @@ class GenericOnnxServiceTest {
 
 
 
+    /**
+     * Creates a mock model descriptor and writes a dummy file to its
+     * expected storage path so that the service can find it on disk.
+     *
+     * @param taskType     the task type for the model
+     * @param id           the model identifier
+     * @param relativePath the relative storage path for the model file
+     * @return a ModelDescriptor referencing the created file
+     * @throws IOException if file creation fails
+     */
     private ModelDescriptor createDummyModel(TaskType taskType, String id, String relativePath) throws IOException {
         ModelDescriptor descriptor = new ModelDescriptor(
                 id,

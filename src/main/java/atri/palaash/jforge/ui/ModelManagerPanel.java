@@ -35,6 +35,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Panel for managing models: view the full model registry (table), download
+ * ONNX models, import model files from disk, and convert PyTorch models to
+ * ONNX format. Progress is shown via a progress bar and status label.
+ */
 public class ModelManagerPanel extends JPanel {
 
     private final ModelRegistry modelRegistry;
@@ -46,6 +51,14 @@ public class ModelManagerPanel extends JPanel {
     private final JTable table;
     private Runnable onModelsUpdated;
 
+    /**
+     * Constructs the Model Manager panel with a table of all registered models,
+     * buttons for refresh, import, and download, and a status bar with progress.
+     *
+     * @param modelRegistry   the registry containing all known model descriptors
+     * @param modelStorage    the storage backend for checking local availability
+     * @param modelDownloader handles downloading models from remote sources
+     */
     public ModelManagerPanel(ModelRegistry modelRegistry, ModelStorage modelStorage, ModelDownloader modelDownloader) {
         super(new BorderLayout(12, 12));
         this.modelRegistry = modelRegistry;
@@ -122,6 +135,10 @@ public class ModelManagerPanel extends JPanel {
         setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
     }
 
+    /**
+     * Refreshes the table data from the model registry and updates the
+     * local availability status for every model.
+     */
     private void refreshTable() {
         tableModel.setRows(modelRegistry.allModels());
         tableModel.refreshAvailability();
@@ -161,6 +178,10 @@ public class ModelManagerPanel extends JPanel {
         }
     }
 
+    /**
+     * Fetches the latest list of available ONNX and PyTorch models from
+     * Hugging Face and merges them into the local model registry.
+     */
     public void refreshModelsFromHuggingFace() {
         statusLabel.setText("Refreshing models from Hugging Face (ONNX + PyTorch)...");
         progressBar.setVisible(true);
@@ -182,10 +203,24 @@ public class ModelManagerPanel extends JPanel {
                 }));
     }
 
+    /**
+     * Registers a callback that is invoked whenever the set of available
+     * models changes (download, import, conversion, or refresh).
+     *
+     * @param onModelsUpdated runnable to notify other panels of model changes
+     */
     public void setOnModelsUpdated(Runnable onModelsUpdated) {
         this.onModelsUpdated = onModelsUpdated;
     }
 
+    /**
+     * Initiates downloading of a model, updating progress in the table and
+     * progress bar. On completion, marks the model as available and notifies
+     * listeners.
+     *
+     * @param descriptor the model to download
+     * @param row        the table row index for updating availability
+     */
     private void startDownload(ModelDescriptor descriptor, int row) {
         statusLabel.setText("Downloading " + descriptor.displayName() + "...");
         progressBar.setVisible(true);
@@ -209,6 +244,12 @@ public class ModelManagerPanel extends JPanel {
                 }));
     }
 
+    /**
+     * Updates the progress bar and table with the latest download progress.
+     *
+     * @param descriptor the model being downloaded
+     * @param progress   the current download progress state
+     */
     private void onProgress(ModelDescriptor descriptor, DownloadProgress progress) {
         SwingUtilities.invokeLater(() -> {
             if (progress.isStatusMessage()) {
@@ -221,6 +262,14 @@ public class ModelManagerPanel extends JPanel {
         });
     }
 
+    /**
+     * Opens a file chooser to let the user import a model file (.onnx, .pt, .pth)
+     * and copies it to the correct model storage location. PyTorch files are
+     * offered for conversion to ONNX first.
+     *
+     * @param descriptor the model descriptor to associate the imported file with
+     * @param row        the table row index for updating availability
+     */
     private void importModelFromFile(ModelDescriptor descriptor, int row) {
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Select model file for " + descriptor.displayName());
@@ -401,6 +450,11 @@ public class ModelManagerPanel extends JPanel {
         }
     }
 
+    /**
+     * Table model backing the model manager table. Shows each model's task type,
+     * display name, file size, format (ONNX/PyTorch), availability, download
+     * progress, and source URL.
+     */
     private static final class ModelTableModel extends AbstractTableModel {
 
         private final String[] columns = {"Task", "Model", "Size", "Format", "Available", "Progress", "Source URL"};
@@ -409,22 +463,43 @@ public class ModelManagerPanel extends JPanel {
         private final Map<String, Integer> progressById = new HashMap<>();
         private final Map<String, Boolean> availableById = new HashMap<>();
 
+        /**
+         * Constructs the table model with the given rows and storage backend.
+         *
+         * @param rows    the initial list of model descriptors
+         * @param storage the storage backend for checking availability
+         */
         private ModelTableModel(List<ModelDescriptor> rows, ModelStorage storage) {
             this.rows = new java.util.ArrayList<>(rows);
             this.storage = storage;
             refreshAvailability();
         }
 
+        /**
+         * Replaces all rows in the model and refreshes availability flags.
+         *
+         * @param newRows the new list of model descriptors
+         */
         private void setRows(List<ModelDescriptor> newRows) {
             rows.clear();
             rows.addAll(newRows);
             refreshAvailability();
         }
 
+        /**
+         * Returns the model descriptor at the given row index.
+         *
+         * @param row the row index
+         * @return the model descriptor at that row
+         */
         private ModelDescriptor modelAt(int row) {
             return rows.get(row);
         }
 
+        /**
+         * Queries the storage backend for each model's availability and
+         * fires a table data changed event to refresh the UI.
+         */
         private void refreshAvailability() {
             for (ModelDescriptor descriptor : rows) {
                 availableById.put(descriptor.id(), storage.isAvailable(descriptor));
@@ -433,32 +508,70 @@ public class ModelManagerPanel extends JPanel {
             fireTableDataChanged();
         }
 
+        /**
+         * Marks a specific row's model as available (or not) in the cache
+         * and fires a row update event.
+         *
+         * @param row       the row index
+         * @param available whether the model is now available locally
+         */
         private void setAvailable(int row, boolean available) {
             ModelDescriptor descriptor = rows.get(row);
             availableById.put(descriptor.id(), available);
             fireTableRowsUpdated(row, row);
         }
 
+        /**
+         * Stores the download progress percentage for a model and fires a
+         * table data changed event.
+         *
+         * @param modelId the model identifier
+         * @param percent the download progress (0-100)
+         */
         private void updateProgress(String modelId, int percent) {
             progressById.put(modelId, percent);
             fireTableDataChanged();
         }
 
+        /**
+         * Returns the total number of model rows.
+         *
+         * @return the row count
+         */
         @Override
         public int getRowCount() {
             return rows.size();
         }
 
+        /**
+         * Returns the number of table columns (7).
+         *
+         * @return the column count
+         */
         @Override
         public int getColumnCount() {
             return columns.length;
         }
 
+        /**
+         * Returns the display name of the column at the given index.
+         *
+         * @param column the column index
+         * @return the column name string
+         */
         @Override
         public String getColumnName(int column) {
             return columns[column];
         }
 
+        /**
+         * Returns the cell value for the given row and column.
+         * Columns are: Task, Model, Size, Format, Available, Progress, Source URL.
+         *
+         * @param rowIndex    the row index
+         * @param columnIndex the column index
+         * @return the cell value (String)
+         */
         @Override
         public Object getValueAt(int rowIndex, int columnIndex) {
             ModelDescriptor descriptor = rows.get(rowIndex);
@@ -474,6 +587,12 @@ public class ModelManagerPanel extends JPanel {
             };
         }
 
+        /**
+         * Formats a byte count into a human-readable size string (B, KB, MB, or GB).
+         *
+         * @param bytes the file size in bytes
+         * @return a formatted string like "1.5 GB" or "?" for unknown size
+         */
         private static String formatSize(long bytes) {
             if (bytes <= 0) return "?";
             if (bytes >= 1_000_000_000) return String.format("%.1f GB", bytes / 1_000_000_000.0);
