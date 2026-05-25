@@ -43,6 +43,9 @@ public class GenericOnnxService implements InferenceService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern TOKEN_PATTERN = Pattern.compile("'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+");
 
+    /* ── Pre-warmed environment & provider cache ────────────────────── */
+    private static volatile String detectedProvider = "";
+
     /* ── Session & Tokenizer Caches ────────────────────────────────── */
     /**
      * Maximum number of ONNX sessions to keep cached simultaneously.
@@ -78,6 +81,43 @@ public class GenericOnnxService implements InferenceService {
         this.taskType = taskType;
         this.storage = storage;
         this.executor = executor;
+        probeGpuOnce();
+    }
+
+    private static boolean gpuProbed = false;
+    private static synchronized void probeGpuOnce() {
+        if (gpuProbed) return;
+        gpuProbed = true;
+        try {
+            OrtEnvironment.getEnvironment(); // pre-warm
+        } catch (Exception e) {
+            System.err.println("[JForge] WARN: ONNX Runtime env init: " + e.getMessage());
+        }
+        try (OrtSession.SessionOptions opts = new OrtSession.SessionOptions()) {
+            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            int cpus = Runtime.getRuntime().availableProcessors();
+            opts.setIntraOpNumThreads(Math.max(1, cpus - 1));
+            opts.setInterOpNumThreads(Math.max(1, Math.min(cpus / 2, 4)));
+            tryEnableMemoryOptimizations(opts);
+            // Attempt GPU providers; falls back to CPU if none available
+            String os = System.getProperty("os.name", "").toLowerCase();
+            String provider = tryProbeGpuProvider(opts, os);
+            if (provider != null && !provider.isEmpty()) {
+                detectedProvider = provider;
+                System.out.println("[JForge] GPU probe: " + provider + " available ✓");
+            } else {
+                System.out.println("[JForge] GPU probe: no GPU provider available, will use CPU");
+            }
+        } catch (Exception e) {
+            System.out.println("[JForge] GPU probe: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Return the cached GPU provider name, or empty string if CPU is used.
+     */
+    public static String detectedProvider() {
+        return detectedProvider;
     }
 
     /* ── Cache helpers ─────────────────────────────────────────────── */
@@ -188,6 +228,7 @@ public class GenericOnnxService implements InferenceService {
                 int cpus = Runtime.getRuntime().availableProcessors();
                 sessionOptions.setIntraOpNumThreads(Math.max(1, cpus - 1));
                 sessionOptions.setInterOpNumThreads(Math.max(1, Math.min(cpus / 2, 4)));
+                tryEnableMemoryOptimizations(sessionOptions);
                 ProviderSelection providerSelection = configureExecutionProvider(sessionOptions, request.preferGpu());
                 System.out.println("[JForge] Using EP: " + providerSelection.provider()
                         + (providerSelection.notes().isBlank() ? "" : " (" + providerSelection.notes() + ")"));
@@ -2412,7 +2453,48 @@ public class GenericOnnxService implements InferenceService {
      * @return {@code null} if the provider was enabled successfully,
      *         or a human-readable reason string if it could not be enabled.
      */
-    private String tryEnableProvider(OrtSession.SessionOptions options, String candidate, StringBuilder notes) {
+    /**
+     * Best-effort enable CPU memory arena and memory pattern optimization
+     * via reflection (available in newer ORT Java bindings).
+     */
+    private static void tryEnableMemoryOptimizations(OrtSession.SessionOptions opts) {
+        try {
+            opts.getClass().getMethod("setMemoryPatternOptimization", boolean.class)
+                    .invoke(opts, true);
+        } catch (Exception ignored) { }
+        try {
+            opts.getClass().getMethod("setEnableCpuMemArena", boolean.class)
+                    .invoke(opts, true);
+        } catch (Exception ignored) { }
+    }
+
+    /**
+     * Quick GPU provider probe — tries each candidate EP once and returns
+     * the first that succeeds, or empty string for CPU.
+     */
+    private static String tryProbeGpuProvider(OrtSession.SessionOptions opts, String os) {
+        List<String> candidates = new ArrayList<>();
+        if (os.contains("mac")) {
+            candidates.add("coreml");
+        } else if (os.contains("win")) {
+            candidates.add("tensorrt_rtx");
+            candidates.add("tensorrt");
+            candidates.add("cuda");
+            candidates.add("directml");
+        } else {
+            candidates.add("tensorrt");
+            candidates.add("cuda");
+            candidates.add("rocm");
+        }
+        StringBuilder notes = new StringBuilder();
+        for (String c : candidates) {
+            String fail = tryEnableProvider(opts, c, notes);
+            if (fail == null) return providerDisplayName(c);
+        }
+        return "";
+    }
+
+    private static String tryEnableProvider(OrtSession.SessionOptions options, String candidate, StringBuilder notes) {
         String failDetail = null;
         try {
             boolean ok = switch (candidate) {
@@ -2478,7 +2560,7 @@ public class GenericOnnxService implements InferenceService {
 
     /* ── Reflection helpers for EP registration ──────────────────────── */
 
-    private boolean invokeNoArg(OrtSession.SessionOptions options, String methodName) {
+    private static boolean invokeNoArg(OrtSession.SessionOptions options, String methodName) {
         try {
             options.getClass().getMethod(methodName).invoke(options);
             return true;
@@ -2487,7 +2569,7 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private boolean invokeIntArg(OrtSession.SessionOptions options, String methodName, int arg) {
+    private static boolean invokeIntArg(OrtSession.SessionOptions options, String methodName, int arg) {
         try {
             options.getClass().getMethod(methodName, int.class).invoke(options, arg);
             return true;
@@ -2496,7 +2578,7 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private boolean invokeLongArg(OrtSession.SessionOptions options, String methodName, long arg) {
+    private static boolean invokeLongArg(OrtSession.SessionOptions options, String methodName, long arg) {
         try {
             options.getClass().getMethod(methodName, long.class).invoke(options, arg);
             return true;
@@ -2505,7 +2587,7 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private boolean invokeStringArg(OrtSession.SessionOptions options, String methodName, String arg) {
+    private static boolean invokeStringArg(OrtSession.SessionOptions options, String methodName, String arg) {
         try {
             options.getClass().getMethod(methodName, String.class).invoke(options, arg);
             return true;
@@ -2514,7 +2596,7 @@ public class GenericOnnxService implements InferenceService {
         }
     }
 
-    private String providerDisplayName(String candidate) {
+    private static String providerDisplayName(String candidate) {
         return switch (candidate) {
             case "tensorrt_rtx" -> "NvTensorRtRtxExecutionProvider";
             case "tensorrt"     -> "TensorrtExecutionProvider";

@@ -413,15 +413,8 @@ public class MainFrame extends JFrame {
     /* ================================================================== */
 
     private String detectEpInfo() {
-        String os = System.getProperty("os.name", "").toLowerCase();
-        String ep;
-        if (gpuEnabled) {
-            if (os.contains("mac")) { ep = "CoreML"; }
-            else if (os.contains("win")) { ep = "DirectML / CUDA"; }
-            else { ep = "CUDA / ROCm"; }
-        } else {
-            ep = "CPU";
-        }
+        String detected = atri.palaash.jforge.inference.GenericOnnxService.detectedProvider();
+        String ep = detected.isBlank() ? (gpuEnabled ? "GPU unavailable, CPU" : "CPU") : detected;
         int cores = Runtime.getRuntime().availableProcessors();
         long mem = Runtime.getRuntime().maxMemory() / (1024 * 1024);
         return "EP: " + ep + "  \u2502  Cores: " + cores + "  \u2502  Heap: " + mem
