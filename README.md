@@ -4,6 +4,10 @@
 
 Desktop Java Swing application for ONNX Runtime inference with intelligent GPU acceleration across NVIDIA, Apple, Intel, and AMD hardware.
 
+<img width="2302" height="1920" alt="image" src="https://github.com/user-attachments/assets/3d286f6d-2cc0-493c-996b-6c3f5c8da120" />
+
+> I don't know why it said "lultelpoop" but that's just stable diffusion on a weak chip I guess.
+
 
 ## Features
 
