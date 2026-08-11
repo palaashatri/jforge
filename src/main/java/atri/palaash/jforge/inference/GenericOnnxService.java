@@ -8,6 +8,9 @@ import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.TensorInfo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import atri.palaash.jforge.engine.scheduler.FlowMatchEulerScheduler;
+import atri.palaash.jforge.engine.scheduler.SchedulerMath;
+import atri.palaash.jforge.engine.random.LatentNoise;
 import atri.palaash.jforge.model.TaskType;
 import atri.palaash.jforge.storage.ModelStorage;
 import atri.palaash.jforge.tokenize.ClipTokenizer;
@@ -633,12 +636,7 @@ public class GenericOnnxService implements InferenceService {
      * @return array of timestep indices descending from 999 to 0
      */
     private static int[] turboTimesteps(int steps) {
-        int[] ts = new int[steps];
-        for (int i = 0; i < steps; i++) {
-            ts[i] = (int) (999.0 * (steps - 1 - i) / Math.max(1, steps - 1));
-        }
-        if (steps == 1) { ts[0] = 999; }
-        return ts;
+        return SchedulerMath.turboTimesteps(steps);
     }
 
     /**
@@ -649,10 +647,7 @@ public class GenericOnnxService implements InferenceService {
      * @return the approximate sigma value for that timestep
      */
     private static float turboSigma(int timestep) {
-        // SD Turbo uses ~linear sigma schedule from sqrt(1-alpha_bar) / sqrt(alpha_bar)
-        float t = timestep / 999.0f;
-        float alphaBar = (float) Math.exp(-0.5 * t * t * 12.0); // approximation
-        return (float) Math.sqrt((1 - alphaBar) / alphaBar);
+        return SchedulerMath.turboSigma(timestep);
     }
 
     /**
@@ -670,17 +665,7 @@ public class GenericOnnxService implements InferenceService {
      */
     private static float[][][][] eulerStep(float[][][][] latents, float[][][] noisePred,
                                            float sigma, float sigmaPrev) {
-        int ch = latents[0].length, h = latents[0][0].length, w = latents[0][0][0].length;
-        float[][][][] out = new float[1][ch][h][w];
-        float dt = sigmaPrev - sigma;
-        for (int c = 0; c < ch; c++) {
-            for (int y = 0; y < h; y++) {
-                for (int x = 0; x < w; x++) {
-                    out[0][c][y][x] = latents[0][c][y][x] + dt * noisePred[c][y][x];
-                }
-            }
-        }
-        return out;
+        return SchedulerMath.eulerStep(latents, noisePred, sigma, sigmaPrev);
     }
 
     /* ================================================================== */
@@ -1394,10 +1379,11 @@ public class GenericOnnxService implements InferenceService {
 
             // ── Flow Matching Euler schedule ──
             // SD 3.5 uses a shifted sigma schedule: sigma = shift * t / (1 + (shift-1)*t)
+            FlowMatchEulerScheduler flowScheduler = new FlowMatchEulerScheduler(shiftFactor);
             float[] sigmas = new float[steps + 1];
             for (int i = 0; i <= steps; i++) {
                 float t = 1.0f - (float) i / steps; // goes from 1.0 to 0.0
-                sigmas[i] = shiftFactor * t / (1.0f + (shiftFactor - 1.0f) * t);
+                sigmas[i] = flowScheduler.shifted(t);
             }
 
             // Release pooled arrays after batchedPooled is built
@@ -2142,16 +2128,7 @@ public class GenericOnnxService implements InferenceService {
      * @return a [1][4][latentHeight][latentWidth] tensor filled with N(0,1) noise
      */
     private float[][][][] randomLatents(long seed, int latentHeight, int latentWidth) {
-        Random random = new Random(seed);
-        float[][][][] values = new float[1][4][latentHeight][latentWidth];
-        for (int c = 0; c < 4; c++) {
-            for (int y = 0; y < latentHeight; y++) {
-                for (int x = 0; x < latentWidth; x++) {
-                    values[0][c][y][x] = (float) random.nextGaussian();
-                }
-            }
-        }
-        return values;
+        return LatentNoise.randomLatents(seed, 4, latentHeight, latentWidth);
     }
 
     /**
@@ -2191,14 +2168,7 @@ public class GenericOnnxService implements InferenceService {
      * @return float array of cumulative alpha values
      */
     private float[] computeDefaultAlphaCumprod(int trainTimesteps, double betaStart, double betaEnd) {
-        float[] alphaCumprod = new float[trainTimesteps];
-        double cumulative = 1.0;
-        for (int i = 0; i < trainTimesteps; i++) {
-            double beta = betaStart + (betaEnd - betaStart) * i / Math.max(1, trainTimesteps - 1);
-            cumulative *= (1.0 - beta);
-            alphaCumprod[i] = (float) cumulative;
-        }
-        return alphaCumprod;
+        return SchedulerMath.computeAlphaCumprod(trainTimesteps, betaStart, betaEnd);
     }
 
     /**
@@ -2210,12 +2180,7 @@ public class GenericOnnxService implements InferenceService {
      * @return array of {@code steps} timestep indices in descending order
      */
     private int[] createTimesteps(int steps, int trainTimesteps) {
-        int[] timesteps = new int[steps];
-        float stride = (float) (trainTimesteps - 1) / Math.max(1, steps - 1);
-        for (int i = 0; i < steps; i++) {
-            timesteps[i] = Math.max(0, Math.round((steps - 1 - i) * stride));
-        }
-        return timesteps;
+        return SchedulerMath.createTimesteps(steps, trainTimesteps);
     }
 
     /**
@@ -2227,17 +2192,7 @@ public class GenericOnnxService implements InferenceService {
      * @return a batched tensor [2][C][H][W] with both copies identical
      */
     private float[][][][] duplicateBatch(float[][][][] latents) {
-        int channels = latents[0].length;
-        int h = latents[0][0].length;
-        int w = latents[0][0][0].length;
-        float[][][][] out = new float[2][channels][h][w];
-        for (int c = 0; c < channels; c++) {
-            for (int y = 0; y < h; y++) {
-                System.arraycopy(latents[0][c][y], 0, out[0][c][y], 0, w);
-                System.arraycopy(latents[0][c][y], 0, out[1][c][y], 0, w);
-            }
-        }
-        return out;
+        return SchedulerMath.duplicateBatch(latents);
     }
 
     /**
@@ -2253,18 +2208,7 @@ public class GenericOnnxService implements InferenceService {
      * @return the guided noise prediction
      */
     private float[][][] guidance(float[][][] uncond, float[][][] cond, float guidanceScale) {
-        int c = uncond.length;
-        int h = uncond[0].length;
-        int w = uncond[0][0].length;
-        float[][][] out = new float[c][h][w];
-        for (int ch = 0; ch < c; ch++) {
-            for (int y = 0; y < h; y++) {
-                for (int x = 0; x < w; x++) {
-                    out[ch][y][x] = uncond[ch][y][x] + guidanceScale * (cond[ch][y][x] - uncond[ch][y][x]);
-                }
-            }
-        }
-        return out;
+        return SchedulerMath.guidance(uncond, cond, guidanceScale);
     }
 
     /**
@@ -2285,26 +2229,7 @@ public class GenericOnnxService implements InferenceService {
                                     float[][][] eps,
                                     float alphaT,
                                     float alphaPrev) {
-        int c = latents[0].length;
-        int h = latents[0][0].length;
-        int w = latents[0][0][0].length;
-        float sqrtAlphaT = (float) Math.sqrt(Math.max(1e-6f, alphaT));
-        float sqrtOneMinusAlphaT = (float) Math.sqrt(Math.max(1e-6f, 1f - alphaT));
-        float sqrtAlphaPrev = (float) Math.sqrt(Math.max(1e-6f, alphaPrev));
-        float sqrtOneMinusAlphaPrev = (float) Math.sqrt(Math.max(1e-6f, 1f - alphaPrev));
-
-        float[][][][] out = new float[1][c][h][w];
-        for (int ch = 0; ch < c; ch++) {
-            for (int y = 0; y < h; y++) {
-                for (int x = 0; x < w; x++) {
-                    float xT = latents[0][ch][y][x];
-                    float e = eps[ch][y][x];
-                    float x0 = (xT - sqrtOneMinusAlphaT * e) / sqrtAlphaT;
-                    out[0][ch][y][x] = sqrtAlphaPrev * x0 + sqrtOneMinusAlphaPrev * e;
-                }
-            }
-        }
-        return out;
+        return SchedulerMath.ddimStep(latents, eps, alphaT, alphaPrev);
     }
 
     /**
@@ -2317,15 +2242,7 @@ public class GenericOnnxService implements InferenceService {
      * @return a new tensor with every element multiplied by {@code scale}
      */
     private float[][][][] scaleLatents(float[][][][] latents, float scale) {
-        float[][][][] out = new float[1][latents[0].length][latents[0][0].length][latents[0][0][0].length];
-        for (int c = 0; c < latents[0].length; c++) {
-            for (int y = 0; y < latents[0][0].length; y++) {
-                for (int x = 0; x < latents[0][0][0].length; x++) {
-                    out[0][c][y][x] = latents[0][c][y][x] * scale;
-                }
-            }
-        }
-        return out;
+        return SchedulerMath.scaleLatents(latents, scale);
     }
 
     /**
