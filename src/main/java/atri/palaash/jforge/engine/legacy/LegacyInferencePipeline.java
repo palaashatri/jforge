@@ -94,14 +94,22 @@ public final class LegacyInferencePipeline implements GenerationPipeline {
         long start = System.currentTimeMillis();
         List<GeneratedImage> images = new ArrayList<>();
 
-        for (int i = 0; i < request.batchSize(); i++) {
+        // Resolve the random-seed marker once at the generation boundary so
+        // isRandomSeed() is truthful, the batch derives from one base seed,
+        // and the resolved seed is recorded in the manifest.
+        GenerationRequest effective = request.isRandomSeed()
+                ? request.toBuilder().seed(
+                        java.util.concurrent.ThreadLocalRandom.current().nextLong()).build()
+                : request;
+
+        for (int i = 0; i < effective.batchSize(); i++) {
             if (token.isCancelled()) {
                 return GenerationResult.fail(UUID.randomUUID().toString(),
                         "Cancelled by user after " + images.size() + " image(s).");
             }
-            GenerationRequest item = request.batchSize() == 1
-                    ? request
-                    : request.toBuilder().seed(RequestMapper.seedFor(request, i)).build();
+            GenerationRequest item = effective.batchSize() == 1
+                    ? effective
+                    : effective.toBuilder().seed(RequestMapper.seedFor(effective, i)).build();
             listener.onProgress(GenerationProgress.EMPTY);
 
             AtomicBoolean cancelFlag = new AtomicBoolean();
@@ -110,11 +118,11 @@ public final class LegacyInferencePipeline implements GenerationPipeline {
                         if (token.isCancelled()) {
                             cancelFlag.set(true);
                         }
-                        reportProgress(listener, msg, i + 1, request.batchSize());
+                        reportProgress(listener, msg, i + 1, effective.batchSize());
                     };
             InferenceRequest legacy = RequestMapper.toInferenceRequest(
                     item, loaded.model(), legacyProgress, cancelFlag);
-            legacy.reportProgress("Starting generation " + (i + 1) + "/" + request.batchSize());
+            legacy.reportProgress("Starting generation " + (i + 1) + "/" + effective.batchSize());
 
             if (token.isCancelled()) {
                 return GenerationResult.fail(UUID.randomUUID().toString(),
@@ -127,7 +135,7 @@ public final class LegacyInferencePipeline implements GenerationPipeline {
                     String error = result.details().isBlank() ? "Legacy engine produced no output." : result.details();
                     return GenerationResult.fail(item.modelId(), error);
                 }
-                images.add(new GeneratedImage(Path.of(result.artifactPath()), request.width(), request.height(), "png"));
+                images.add(new GeneratedImage(Path.of(result.artifactPath()), effective.width(), effective.height(), "png"));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return GenerationResult.fail(item.modelId(), "Generation interrupted.");
@@ -138,7 +146,7 @@ public final class LegacyInferencePipeline implements GenerationPipeline {
         }
 
         long elapsed = System.currentTimeMillis() - start;
-        GenerationManifest manifest = GenerationManifest.fromRequest(request,
+        GenerationManifest manifest = GenerationManifest.fromRequest(effective,
                 new GenerationManifest.RuntimeFacts(
                         "legacy-ort", "", "", "", "", "", elapsed + "ms",
                         System.getProperty("java.version", "")));

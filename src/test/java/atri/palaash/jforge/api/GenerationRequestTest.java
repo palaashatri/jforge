@@ -6,7 +6,6 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -45,9 +44,16 @@ class GenerationRequestTest {
     }
 
     @Test
-    void randomSeedMarkerResolvesInBuild() {
+    void randomSeedMarkerIsPreservedThroughBuild() {
         GenerationRequest req = GenerationRequest.builder().model("m").build();
-        assertNotEquals(GenerationRequest.RANDOM_SEED, req.seed());
+        // The marker must survive build() so isRandomSeed() is truthful; the
+        // pipeline resolves it once at the generation boundary.
+        assertEquals(GenerationRequest.RANDOM_SEED, req.seed());
+        assertTrue(req.isRandomSeed());
+
+        GenerationRequest explicit = GenerationRequest.builder().model("m").seed(9).build();
+        assertEquals(9, explicit.seed());
+        assertTrue(!explicit.isRandomSeed());
     }
 
     @Test

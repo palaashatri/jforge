@@ -323,12 +323,11 @@ public record GenerationRequest(
          * @return the finished request with a concrete seed
          */
         public GenerationRequest build() {
-            long resolvedSeed = seed;
-            if (resolvedSeed == RANDOM_SEED) {
-                resolvedSeed = java.util.concurrent.ThreadLocalRandom.current().nextLong();
-            }
+            // The RANDOM_SEED marker is preserved here and resolved once at the
+            // pipeline boundary (see LegacyInferencePipeline), so isRandomSeed()
+            // is truthful and the resolved value is stamped into the manifest.
             return new GenerationRequest(
-                    modelId, prompt, negativePrompt, steps, batchSize, resolvedSeed,
+                    modelId, prompt, negativePrompt, steps, batchSize, seed,
                     width, height, cfgScale, denoiseStrength, scheduler, clipSkip,
                     inputImage, mask, loras, controls, references, vaeModelId,
                     precision, quantization, backendId, deviceId, options);
