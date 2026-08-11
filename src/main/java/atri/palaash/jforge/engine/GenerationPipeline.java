@@ -2,6 +2,7 @@ package atri.palaash.jforge.engine;
 
 import atri.palaash.jforge.api.GenerationRequest;
 import atri.palaash.jforge.api.GenerationResult;
+import atri.palaash.jforge.engine.backend.ComputeBackend;
 
 /**
  * Core engine SPI. A pipeline is a self-contained implementation of one

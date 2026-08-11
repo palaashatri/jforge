@@ -19,35 +19,46 @@ placeholder, or documentation does **not** count as implemented.
 
 ---
 
-## Current score (baseline — audited 2026-08-11)
+## Current score (re-scored 2026-08-11 after first full `mvn test` on the M0 branch)
 
-**Total: 22 / 100**
+**Total: 27 / 100**
 
 | Category | Weight | Score | Notes |
 |---|---|---|---|
-| Inference architecture & correctness | 15 | 5 | Working SD 1.5/Turbo/SDXL/ESRGAN inference; but monolithic `GenericOnnxService` god object, untyped request, batch conflated with steps, no golden tests |
+| Inference architecture & correctness | 15 | 8 | God object split into per-architecture pipelines over shared engine components; typed request; batch/steps decoupled; deterministic seeds locked by test; scheduler math pinned by hand-computed golden values; first full `mvn test` is green (67 tests). Legacy adapter still advisory on scheduler + sequential batch |
 | Model-family coverage | 10 | 2 | SD 1.5 + SDXL + SD 3.x (converted); no FLUX/Qwen/Z-Image, no real model bundle abstraction |
-| Image generation quality/features | 10 | 4 | Real t2i works; no img2img (removed in a recent commit), no real inpaint/outpaint engine support |
+| Image generation quality/features | 10 | 4 | Real t2i works; no img2img, no real inpaint/outpaint engine support |
 | Canvas/editing/inpaint/outpaint | 10 | 0 | None — Swing form-centric UI only |
 | LoRA/Control/reference conditioning | 10 | 0 | None |
-| GPU backends/performance/memory | 10 | 4 | ONNX Runtime EP probing (CoreML/CUDA/TensorRT/DirectML/OpenVINO/ROCm) is real; no benchmark harness, ad-hoc session cache, `System.gc()` used for CoreML |
-| UI/UX/product polish | 15 | 3 | FlatLaf Swing shell, tabbed Output/History/Library/Log; not the target workspace; no design system, no canvas |
-| Training/model tooling | 5 | 1 | PyTorch→ONNX conversion via Python venv is real; no LoRA training |
+| GPU backends/performance/memory | 10 | 4 | ONNX Runtime EP probing real; CoreML `System.gc()` hack removed; still no benchmark harness or memory estimation |
+| UI/UX/product polish | 15 | 3 | FlatLaf Swing shell; not the target workspace |
+| Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
-| CLI/API/server/plugins/workflows | 5 | 0 | None |
-| QA/reliability/release/accessibility | 5 | 2 | 2 negative-path unit tests; Linux-only CI build; no Windows/macOS CI, no UI/visual QA, no accessibility work |
+| CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
+| QA/reliability/release/accessibility | 5 | 3 | 67 unit/integration tests green locally (tokenizer, scheduler incl. golden values, API, engine, legacy adapter); CI `test` job configured but not yet executed; no Windows/macOS CI, no UI/visual QA |
 
-### How the baseline was established
+### How this re-score was established
 
-- Audited all 24 Java files, `pom.xml`, GitHub Actions, README, scripts
-  on `2026-08-11` (commit `ca6732b`).
-- The app compiles and runs per README claims (SD 1.5 t2i, SDXL, ESRGAN
-  upscale). Current machine has **no JDK 21 / Maven**, so runtime
-  re-verification and `mvn test` execution were not possible in this
-  session; code was reviewed statically.
-- The single existing test class (`GenericOnnxServiceTest`) covers only
-  negative paths (invalid bytes, missing model) and is not wired into
-  GitHub Actions (CI uses `-DskipTests`).
+- Baseline was audited statically at commit `ca6732b` (22/100) — local box
+  had no JDK 21 / Maven, so `mvn test` could not run then.
+- This re-score follows the full M0 tranche on branch
+  `milestone-m0-engine-correctness`: abstractions, god-object split,
+  deterministic seeds, and golden tests, validated by a real
+  `mvn -B test` run (portable Temurin JDK 21.0.12 + Maven 3.9.9),
+  **BUILD SUCCESS, 67 tests, 0 failures**.
+- The first ever full test run surfaced latent branch breakage that the
+  never-run suite had hidden: a missing import in `GenerationPipeline`
+  (`engine.backend.ComputeBackend`), a non-effectively-final var in a
+  `LegacyInferencePipeline` lambda, a test-expected
+  `GenerationManifest.emptyManifest()` factory that did not exist, an
+  unhandled `IOException` in a test lambda, wrong shape assertions in
+  two scheduler tests, and two real behavior gaps (default
+  `supportsScheduler(DDIM)` was false despite the DDIM fallback contract;
+  `GenerationManifest.toRequest()` dropped the recorded backend/device so
+  "recreate generation" could not reproduce the execution target). All
+  fixed; the failing tests encode the intended contract and now pass.
+- Score remains below the M0 target of 30 because M1 (product shell) is
+  untouched and inference accuracy itself is not yet model-level verified.
 
 ---
 
@@ -64,14 +75,15 @@ Progress:
 - [x] New engine abstractions drive the legacy engine — `engine.legacy.RequestMapper` (typed `GenerationRequest` → legacy `InferenceRequest`, fixing the historical batch/steps conflation: `steps` now maps into the legacy "batch" slot that every pipeline reads as its step count, verified by `RequestMapperTest`); `LegacyInferencePipeline` (a real `GenerationPipeline` over `InferenceService`); `api.JForge` embeddable facade (`try (var forge = JForge.create())`); `cli.JForgeCli` (`jforge model list`, `jforge generate ...`)
 - [x] `GenericOnnxService` split into per-architecture pipelines — CLIP + T5 tokenizers extracted to public reusable `tokenize` package; scheduler/latent math delegated to shared `engine.scheduler.SchedulerMath` and `engine.random.LatentNoise`; SD3 shifted-sigma loop uses `FlowMatchEulerScheduler.shifted()`. The god object is now a thin router (`GenericOnnxService` dispatches by model id) over `inference.OnnxPipelineBase` (shared session/tokenizer caches, text encoders, tensor extraction, image conversion) and six per-architecture pipelines: `Sd15OnnxPipeline`, `SdTurboOnnxPipeline`, `SdxlTurboOnnxPipeline`, `SdxlBaseOnnxPipeline`, `Sd3OnnxPipeline`, `RealEsrganOnnxPipeline`. Method bodies were moved verbatim; run-method dispatch behavior unchanged. Public surface (`GenericOnnxService(TaskType, ModelStorage, Executor)`, `run`, `detectedProvider()`, `clearCache()`) preserved — verified by grep against all callers (`ServiceFactory`, `JForge`, `OnnxRuntimeBackend`, `MainFrame`, `GenericOnnxServiceTest`).
 - [x] Deterministic seeded latents verified by test — `engine.random.LatentNoise` + `LatentNoiseTest` (same seed → identical noise, different seeds differ); `RANDOM_SEED` marker preserved through `build()` and resolved once at the pipeline boundary so `isRandomSeed()` is truthful and the resolved seed is stamped into the manifest
-- [x] Golden inference tests (at least scheduler/tokenizer level) — `ClipTokenizerTest`, `T5TokenizerTest` with real fixture files
+- [x] Golden inference tests (at least scheduler/tokenizer level) — `ClipTokenizerTest`, `T5TokenizerTest` with real fixture files; `SchedulerGoldenTest` pins hand-computed expected values (alpha_cumprod, timestep strides, turbo sigma profile, flow-match shifted sigmas, DDIM/Euler single-step outputs) so formula changes fail loudly
 - [x] Structured error handling without stack traces in UI — `GenerationResult.ok/fail` + manifest
 - [x] Regression tests before destructive refactors — tokenizer extraction covered by identical-code regression expectation + `GenericOnnxServiceTest`
+- [x] First full `mvn test` green on branch — portable JDK 21.0.12 + Maven 3.9.9: **67 tests, 0 failures** (`mvn -B test -Dort.artifactId=onnxruntime`). Surfaced and fixed latent build/test/behaviour breaks hidden by the never-run suite (see re-score notes); CoreML `System.gc()` step-hack removed from `Sd15OnnxPipeline`
 
 Blockers:
 
 - None technical. Engine is small enough to refactor incrementally.
-- CI compiles with `mvn -DskipTests`; tokenizer/scheduler tests added but a full `mvn test` run is pending on a JDK 21 + Maven environment (local box has JDK 17, no Maven). A dedicated `test` job was added to the GitHub Actions workflow.
+- CI is not auto-triggered for feature branches (workflow only runs on `main` push + PRs). The `milestone-m0-engine-correctness` branch is pushed; a PR to `main` is required to exercise the `test` job in CI.
 - Legacy adapter limitations (documented in `LegacyInferencePipeline`): legacy selects schedulers internally by model id so `request.scheduler()` is advisory; `batchSize > 1` runs as sequential derived-seed runs, not true batched inference.
 
 ---
@@ -91,7 +103,7 @@ Blockers:
 | img2img | removed | commit `ca6732b` "remove Img2Img feature" |
 | Inpainting / outpainting engine | planned | no mask plumbing |
 | Batch generation | implemented | `InferenceRequest.batch` but conflated with steps in pipelines |
-| Deterministic seeds | implemented | `Random(seed)` for latents; not test-locked |
+| Deterministic seeds | implemented | `Random(seed)` for latents; `seeded` marker resolved once at pipeline boundary and logged; locked by `LatentNoiseTest` |
 | Negative prompt / CFG | implemented | SD 1.5, SDXL Base, SD3 |
 | Prompt weighting | implemented | `promptWeight` used as CFG in SDXL/SD3; ignored by distilled paths |
 
@@ -102,7 +114,7 @@ Blockers:
 | HF discovery & download w/ resume | implemented | `ModelDownloader` |
 | PyTorch→ONNX conversion | implemented | `PyTorchToOnnxConverter` + Python scripts |
 | Gated model token auth | implemented | `ModelDownloader` |
-| Model bundle abstraction | planned | only `ModelDescriptor` (id/name/task/path/url) |
+| Model bundle abstraction | partial | typed `engine.ModelBundle` record + builder; no safetensors/Diffusers ingestion yet |
 | Checksum/verify on install | planned | download resume exists, no checksum metadata |
 | safetensors / Diffusers ingestion | planned | conversion path only |
 
@@ -133,8 +145,8 @@ Blockers:
 
 | Feature | Status | Evidence |
 |---|---|---|
-| CLI (`jforge ...`) | planned | none |
-| Java embeddable API | planned | none |
+| CLI (`jforge ...`) | partial | `cli.JForgeCli`: `jforge model list`, `jforge generate` (syntax in place; server/upscale/benchmark subcommands pending) |
+| Java embeddable API | implemented | `api.JForge` facade (`try (var forge = JForge.create()) { ... }`) |
 | REST server / workers | planned | none |
 | Plugins / scripting / workflows | planned | none |
 | Compose desktop UI | planned | none |
@@ -154,29 +166,30 @@ Blockers:
 | Category | Status | Evidence |
 |---|---|---|
 | Unit — negative paths | implemented | `GenericOnnxServiceTest` (2 tests) |
-| Unit — schedulers | planned | — |
-| Unit — tokenizers | planned | — |
-| Golden inference | planned | — |
-| Integration | planned | — |
-| CI — Linux build | implemented | `.github/workflows/build.yml` (skipTests) |
+| Unit — schedulers | implemented | `SchedulerMathTest`, `SchedulerTest`, `SchedulerGoldenTest` (hand-computed golden values) |
+| Unit — tokenizers | implemented | `ClipTokenizerTest`, `T5TokenizerTest` with fixture files |
+| Unit — API / engine | implemented | `GenerationRequestTest`, `PipelineCapabilitiesTest`, `GenerationManifestTest`, `LegacyInferencePipelineTest`, `LatentNoiseTest`, `RequestMapperTest` |
+| Golden inference | partial | tokenizer/scheduler-level golden values; full model-level golden outputs pending real model fixtures |
+| Integration | partial | `LegacyInferencePipelineTest` exercises the typed→legacy bridge with a stubbed `InferenceService` |
+| CI — Linux build | implemented | `.github/workflows/build.yml` (packaging uses `-DskipTests`) |
 | CI — Windows/macOS | planned | — |
-| CI — tests run | **not running** | workflow uses `-DskipTests` |
+| CI — tests run | configured (not yet executed) | `test` job added; branch not yet CI-validated (workflow needs `main` push or PR) |
 
 ---
 
 ## Known blockers / risks
 
-1. **No CI test execution.** The build workflow passes `-DskipTests`;
-   tests never run in CI. Fix as part of M0 QA.
+1. **CI test job not yet executed.** The `test` job exists in the
+   workflow but has not run — the M0 branch needs a PR to `main` to
+   trigger it. Local `mvn test` is green (67 tests).
 2. **Single-module build.** Acceptable interim per migration rule, but
    module split is pending.
-3. **`GenericOnnxService` growth.** All model-specific logic, tokenizers,
-   provider selection, and caching in one 3266-line class.
-4. **CoreML `System.gc()`** in the SD 1.5 denoise loop — violates the
-   "no `System.gc()` as primary GPU memory mechanism" rule.
-5. **Batch semantics.** Pipelines read `request.batch()` as the *step
-   count* (`int steps = ...request.batch()...`). This is a correctness
-   bug per the product contract.
+3. **Legacy adapter fidelity.** Legacy pipelines pick schedulers
+   internally by model id and run `batchSize > 1` as sequential
+   derived-seed runs, not true batched inference.
+4. **Model-level inference not golden-verified.** Scheduler/tokenizer
+   math is pinned by tests, but no runnable small-model fixture yet
+   locks full pipeline outputs.
 
 ---
 

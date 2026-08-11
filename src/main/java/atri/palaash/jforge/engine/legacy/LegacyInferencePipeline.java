@@ -113,12 +113,13 @@ public final class LegacyInferencePipeline implements GenerationPipeline {
             listener.onProgress(GenerationProgress.EMPTY);
 
             AtomicBoolean cancelFlag = new AtomicBoolean();
+            int itemIndex = i;
             java.util.function.Consumer<String> legacyProgress =
                     msg -> {
                         if (token.isCancelled()) {
                             cancelFlag.set(true);
                         }
-                        reportProgress(listener, msg, i + 1, effective.batchSize());
+                        reportProgress(listener, msg, itemIndex + 1, effective.batchSize());
                     };
             InferenceRequest legacy = RequestMapper.toInferenceRequest(
                     item, loaded.model(), legacyProgress, cancelFlag);

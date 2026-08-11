@@ -72,6 +72,12 @@ public record GenerationManifest(
         controlHashes = controlHashes == null ? List.of() : List.copyOf(controlHashes);
     }
 
+    public static GenerationManifest emptyManifest() {
+        return new GenerationManifest("", "", "", "", List.of(), List.of(),
+                "", "", null, null, null, null, null, null, null, null, null,
+                "", "", null, "", "", "");
+    }
+
     /**
      * Builds a manifest from a generation request and runtime facts.
      *
@@ -143,6 +149,12 @@ public record GenerationManifest(
         }
         if (quantization != null) {
             Quantization.fromString(quantization).ifPresent(b::quantization);
+        }
+        if (backend != null && !backend.isBlank()) {
+            b.backendId(backend);
+        }
+        if (device != null && !device.isBlank()) {
+            b.deviceId(device);
         }
         if (batchSize != null) {
             b.batchSize(batchSize);

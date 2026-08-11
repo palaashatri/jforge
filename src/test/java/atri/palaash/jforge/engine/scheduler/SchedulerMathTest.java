@@ -49,7 +49,8 @@ class SchedulerMathTest {
         float[][][][] out = SchedulerMath.ddimStep(latents, eps, 0.5f, 0.2f);
         assertEquals(1, out.length);
         assertEquals(4, out[0].length);
-        assertEquals(1, out[0][0].length);
+        assertEquals(2, out[0][0].length);
+        assertEquals(2, out[0][0][0].length);
         // deterministic — same inputs produce identical output
         float[][][][] again = SchedulerMath.ddimStep(latents, eps, 0.5f, 0.2f);
         for (int c = 0; c < 4; c++) {

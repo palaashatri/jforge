@@ -67,6 +67,11 @@ public final class PipelineCapabilities {
 
     public boolean supportsScheduler(SchedulerType scheduler) {
         Objects.requireNonNull(scheduler, "scheduler");
+        if (supportedSchedulers.isEmpty()) {
+            // No explicit declaration means "default DDIM pipeline": DDIM is the
+            // universal discrete fallback and the builder's recommendedScheduler.
+            return scheduler == SchedulerType.DDIM;
+        }
         return supportedSchedulers.contains(scheduler);
     }
 

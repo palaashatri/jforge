@@ -81,7 +81,12 @@ class LegacyInferencePipelineTest {
         AtomicInteger calls = new AtomicInteger();
         InferenceService stub = request -> {
             calls.incrementAndGet();
-            Path artifact = Files.createTempFile(tempDir, "batched" + calls.get(), ".png");
+            Path artifact;
+            try {
+                artifact = Files.createTempFile(tempDir, "batched" + calls.get(), ".png");
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
             return CompletableFuture.completedFuture(
                     InferenceResult.ok("ok", "done", artifact.toString(), "image/png"));
         };

@@ -22,27 +22,21 @@ public record GenerationResult(
     public GenerationResult {
         generationId = generationId == null ? "" : generationId;
         images = images == null ? List.of() : List.copyOf(images);
-        manifest = manifest == null ? emptyManifest() : manifest;
+manifest = manifest == null ? GenerationManifest.emptyManifest() : manifest;
         error = error == null ? "" : error;
         device = device == null ? "" : device;
         backend = backend == null ? "" : backend;
     }
 
-    private static GenerationManifest emptyManifest() {
-        return new GenerationManifest("", "", "", "", List.of(), List.of(),
-                "", "", null, null, null, null, null, null, null, null, null,
-                "", "", null, "", "", "");
-    }
-
     public static GenerationResult ok(String generationId, List<GeneratedImage> images,
-                                     GenerationManifest manifest, long elapsedMillis,
-                                     String device, String backend) {
+                                      GenerationManifest manifest, long elapsedMillis,
+                                      String device, String backend) {
         return new GenerationResult(true, generationId, images, manifest, "",
                 elapsedMillis, device, backend);
     }
 
     public static GenerationResult fail(String generationId, String error) {
-        return new GenerationResult(false, generationId, List.of(), emptyManifest(), error,
+        return new GenerationResult(false, generationId, List.of(), GenerationManifest.emptyManifest(), error,
                 0L, "", "");
     }
 

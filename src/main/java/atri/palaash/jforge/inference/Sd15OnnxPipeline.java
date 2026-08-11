@@ -130,11 +130,6 @@ class Sd15OnnxPipeline extends OnnxPipelineBase {
                     if (request.isCancelled()) {
                         return InferenceResult.fail("Cancelled by user.");
                     }
-
-                    if (provider.contains("CoreML") && stepIndex % 5 == 4) {
-                        System.gc();
-                        System.runFinalization();
-                    }
                 }
 
                 request.reportProgress("Decoding latents with VAE…");
