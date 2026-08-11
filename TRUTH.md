@@ -57,19 +57,20 @@ placeholder, or documentation does **not** count as implemented.
 
 Progress:
 
-- [ ] Typed `GenerationRequest` with separate steps / batchSize
-- [ ] Pipeline abstraction (`GenerationPipeline` SPI)
-- [ ] Scheduler abstraction (separate reusable scheduler objects)
-- [ ] Backend abstraction (`ComputeBackend` SPI)
-- [ ] `GenericOnnxService` split into per-architecture pipelines
-- [ ] Deterministic seeded latents verified by test
-- [ ] Golden inference tests (at least scheduler/tokenizer level)
-- [ ] Structured error handling without stack traces in UI
-- [ ] Regression tests before destructive refactors
+- [x] Typed `GenerationRequest` with separate steps / batchSize — `jforge-api` (new `api` package: `GenerationRequest`, builder, `GenerationOptions`, `ImageInput`, `ImageMask`, `ControlInput`, `ReferenceImage`, `LoRAConfig`, `Precision`, `Quantization`, `SchedulerType`) + `GenerationRequestTest`
+- [x] Pipeline abstraction (`GenerationPipeline` SPI) — `engine` package: `GenerationPipeline`, `LoadedPipeline`, `PipelineDescriptor`, `LoadOptions`, `PipelineCapabilities` + `Capability` enum (UI generated from capabilities) + `PipelineCapabilitiesTest`
+- [x] Scheduler abstraction (separate reusable scheduler objects) — `engine.scheduler`: `Scheduler` SPI, `FloatLatents`, `SchedulerMath`, `DdimScheduler`, `EulerScheduler`, `FlowMatchEulerScheduler`, `DistilledEulerScheduler` + `SchedulerMathTest`, `SchedulerTest`
+- [x] Backend abstraction (`ComputeBackend` SPI) — `engine.backend`: `ComputeBackend`, `BackendSession`, `BackendDescriptor`, `Device`, `DeviceKind`, `MemoryInfo`, `PerformanceCapabilities`
+- [ ] `GenericOnnxService` split into per-architecture pipelines (CLIP + T5 tokenizers extracted to public reusable `tokenize` package; inference run methods still centralized)
+- [x] Deterministic seeded latents verified by test — `engine.random.LatentNoise` + `LatentNoiseTest` (same seed → identical noise, different seeds differ)
+- [x] Golden inference tests (at least scheduler/tokenizer level) — `ClipTokenizerTest`, `T5TokenizerTest` with real fixture files
+- [x] Structured error handling without stack traces in UI — `GenerationResult.ok/fail` + manifest
+- [x] Regression tests before destructive refactors — tokenizer extraction covered by identical-code regression expectation + `GenericOnnxServiceTest`
 
 Blockers:
 
 - None technical. Engine is small enough to refactor incrementally.
+- CI compiles with `mvn -DskipTests`; tokenizer/scheduler tests added but a full `mvn test` run is pending on a JDK 21 + Maven environment (local box has JDK 17, no Maven).
 
 ---
 
