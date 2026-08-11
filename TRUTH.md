@@ -60,7 +60,8 @@ Progress:
 - [x] Typed `GenerationRequest` with separate steps / batchSize — `jforge-api` (new `api` package: `GenerationRequest`, builder, `GenerationOptions`, `ImageInput`, `ImageMask`, `ControlInput`, `ReferenceImage`, `LoRAConfig`, `Precision`, `Quantization`, `SchedulerType`) + `GenerationRequestTest`
 - [x] Pipeline abstraction (`GenerationPipeline` SPI) — `engine` package: `GenerationPipeline`, `LoadedPipeline`, `PipelineDescriptor`, `LoadOptions`, `PipelineCapabilities` + `Capability` enum (UI generated from capabilities) + `PipelineCapabilitiesTest`
 - [x] Scheduler abstraction (separate reusable scheduler objects) — `engine.scheduler`: `Scheduler` SPI, `FloatLatents`, `SchedulerMath`, `DdimScheduler`, `EulerScheduler`, `FlowMatchEulerScheduler`, `DistilledEulerScheduler` + `SchedulerMathTest`, `SchedulerTest`
-- [x] Backend abstraction (`ComputeBackend` SPI) — `engine.backend`: `ComputeBackend`, `BackendSession`, `BackendDescriptor`, `Device`, `DeviceKind`, `MemoryInfo`, `PerformanceCapabilities`
+- [x] Backend abstraction (`ComputeBackend` SPI) — `engine.backend`: `ComputeBackend`, `BackendSession`, `BackendDescriptor`, `Device`, `DeviceKind`, `MemoryInfo`, `PerformanceCapabilities`; real impl `engine.legacy.OnnxRuntimeBackend` driven by `GenericOnnxService.detectedProvider()`
+- [x] New engine abstractions drive the legacy engine — `engine.legacy.RequestMapper` (typed `GenerationRequest` → legacy `InferenceRequest`, fixing the historical batch/steps conflation: `steps` now maps into the legacy "batch" slot that every pipeline reads as its step count, verified by `RequestMapperTest`); `LegacyInferencePipeline` (a real `GenerationPipeline` over `InferenceService`); `api.JForge` embeddable facade (`try (var forge = JForge.create())`); `cli.JForgeCli` (`jforge model list`, `jforge generate ...`)
 - [ ] `GenericOnnxService` split into per-architecture pipelines (CLIP + T5 tokenizers extracted to public reusable `tokenize` package; inference run methods still centralized)
 - [x] Deterministic seeded latents verified by test — `engine.random.LatentNoise` + `LatentNoiseTest` (same seed → identical noise, different seeds differ)
 - [x] Golden inference tests (at least scheduler/tokenizer level) — `ClipTokenizerTest`, `T5TokenizerTest` with real fixture files
@@ -70,7 +71,8 @@ Progress:
 Blockers:
 
 - None technical. Engine is small enough to refactor incrementally.
-- CI compiles with `mvn -DskipTests`; tokenizer/scheduler tests added but a full `mvn test` run is pending on a JDK 21 + Maven environment (local box has JDK 17, no Maven).
+- CI compiles with `mvn -DskipTests`; tokenizer/scheduler tests added but a full `mvn test` run is pending on a JDK 21 + Maven environment (local box has JDK 17, no Maven). A dedicated `test` job was added to the GitHub Actions workflow.
+- Legacy adapter limitations (documented in `LegacyInferencePipeline`): legacy selects schedulers internally by model id so `request.scheduler()` is advisory; `batchSize > 1` runs as sequential derived-seed runs, not true batched inference.
 
 ---
 
