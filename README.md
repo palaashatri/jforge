@@ -56,12 +56,41 @@ Override with `-Djforge.ep=cuda` (or any EP key) to force a specific provider.
 - Per-step progress with timing and ETA
 - Session and tokenizer caching for fast repeated inference
 
+### Headless CLI & embeddable Java API
+The same engine runs without any UI:
+
+```bash
+# list registered models
+java -jar jforge-universal.jar model list
+
+# generate (same flags as the desktop form)
+java -jar jforge-universal.jar generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
+
+# upscale an image
+java -jar jforge-universal.jar upscale --model realesrgan --image photo.png
+```
+
+Java applications can embed the engine directly — no Swing/UI classes on
+this path:
+
+```java
+try (JForge forge = JForge.create()) {
+    GenerationResult result = forge.generate(
+            GenerationRequest.builder()
+                    .model("sd_v15_onnx")
+                    .prompt("a cat")
+                    .steps(20)
+                    .build());
+    System.out.println(result.images().get(0).path());
+}
+```
+
 ## Not yet built (honest list)
 The following are **planned** per [AGENTS.md](AGENTS.md) but do not exist
 yet: infinite canvas / layers, img2img, inpainting/outpainting, LoRA,
-ControlNet, training, video, CLI/server/worker, embeddable Java API,
-plugins, Compose desktop UI, installers, benchmark harness. Do not
-report these as working.
+ControlNet, training, video, REST server/worker, plugins, workflow graph,
+Compose desktop UI, installers, benchmark harness. Do not report these
+as working.
 
 ## Downloads
 
@@ -103,18 +132,20 @@ mvn clean compile exec:java
 ### Run tests
 
 ```bash
-mvn test
+# CPU-only test run
+mvn -B test -Dort.artifactId=onnxruntime
 ```
 
-> Tests are currently minimal (negative-path failure handling). The
-> scheduler, tokenizer, and golden-inference suites are being added as
-> part of the M0 engineering milestone.
+The suite (70 tests) covers the typed request API, scheduler math —
+including hand-computed golden values for every schedule and step
+formula — CLIP/T5 tokenizers against real fixtures, the legacy engine
+bridge, CLI argument parsing, and manifest round-tripping.
 
 ## CI / CD
 
-GitHub Actions builds both JAR variants on push/PR (see
-[.github/workflows/build.yml](.github/workflows/build.yml)). Packaged
-artifacts are uploaded; version tags create GitHub Releases.
+GitHub Actions runs `mvn test` plus both JAR builds on push/PR to
+`main` (see [.github/workflows/build.yml](.github/workflows/build.yml)).
+Packaged artifacts are uploaded; version tags create GitHub Releases.
 
 ## Requirements
 

@@ -2,9 +2,12 @@ package atri.palaash.jforge.cli;
 
 import atri.palaash.jforge.api.GenerationRequest;
 import atri.palaash.jforge.api.GenerationResult;
+import atri.palaash.jforge.api.ImageInput;
 import atri.palaash.jforge.api.JForge;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 
 /**
@@ -14,6 +17,7 @@ import java.util.Arrays;
  * <pre>
  * jforge model list
  * jforge generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
+ * jforge upscale --model realesrgan --image photo.png
  * </pre>
  *
  * No UI classes are loaded on the CLI path.
@@ -41,6 +45,9 @@ public final class JForgeCli {
                 }
                 case "generate" -> {
                     return generate(forge, Arrays.copyOfRange(args, 1, args.length));
+                }
+                case "upscale" -> {
+                    return upscale(forge, Arrays.copyOfRange(args, 1, args.length));
                 }
                 default -> {
                     System.out.println("Unknown command: " + command);
@@ -104,6 +111,52 @@ public final class JForgeCli {
         return 1;
     }
 
+    private int upscale(JForge forge, String[] args) {
+        String model = value(args, "model", null);
+        String image = value(args, "image", null);
+        int width = intValue(args, "width", 0);
+        int height = intValue(args, "height", 0);
+
+        if (model == null || image == null) {
+            System.out.println("Usage: jforge upscale --model <id> --image <path> [--width N] [--height N]");
+            System.out.println("Known models:");
+            forge.registry().allModels().forEach(d -> System.out.println("  " + d.id()));
+            return 1;
+        }
+        Path source = Path.of(image);
+        if (!Files.isRegularFile(source)) {
+            System.out.println("[jforge] Input image not found: " + source.toAbsolutePath());
+            return 1;
+        }
+
+        GenerationRequest request = upscaleRequest(model, source, width, height);
+        System.out.println("[jforge] Upscaling: " + source);
+        long start = System.nanoTime();
+        GenerationResult result = forge.generate(request);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        if (result.success()) {
+            result.images().forEach(img ->
+                    System.out.println("[jforge] Wrote " + img.path() + " (" + elapsedMs + " ms)"));
+            return 0;
+        }
+        System.out.println("[jforge] Failed: " + result.error());
+        return 1;
+    }
+
+    /**
+     * Pure request factory for the upscale path: routes an input image
+     * through the typed API; the legacy engine dispatches by model id.
+     */
+    static GenerationRequest upscaleRequest(String modelId, Path image, int width, int height) {
+        GenerationRequest.Builder builder = GenerationRequest.builder()
+                .model(modelId)
+                .inputImage(new ImageInput(image, width, height))
+                .width(width > 0 ? width : 512)
+                .height(height > 0 ? height : 512);
+        return builder.build();
+    }
+
     static String value(String[] args, String key, String fallback) {
         for (int i = 0; i < args.length - 1; i++) {
             if (("--" + key).equals(args[i])) {
@@ -132,6 +185,7 @@ public final class JForgeCli {
         System.out.println("Usage:");
         System.out.println("  jforge model list");
         System.out.println("  jforge generate --model <id> --prompt \"...\" [options]");
+        System.out.println("  jforge upscale --model <id> --image <path> [--width N] [--height N]");
         System.out.println();
         System.out.println("Options:");
         System.out.println("  --steps N   denoising steps (default 20)");

@@ -35,7 +35,7 @@ placeholder, or documentation does **not** count as implemented.
 | Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 3 | 67 unit/integration tests green locally (tokenizer, scheduler incl. golden values, API, engine, legacy adapter); CI `test` job configured but not yet executed; no Windows/macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 3 | 70 unit/integration tests green locally (tokenizer, scheduler incl. golden values, API, engine, legacy adapter, CLI parsing); CI `test` job configured but not yet executed; no Windows/macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -79,6 +79,7 @@ Progress:
 - [x] Structured error handling without stack traces in UI — `GenerationResult.ok/fail` + manifest
 - [x] Regression tests before destructive refactors — tokenizer extraction covered by identical-code regression expectation + `GenericOnnxServiceTest`
 - [x] First full `mvn test` green on branch — portable JDK 21.0.12 + Maven 3.9.9: **67 tests, 0 failures** (`mvn -B test -Dort.artifactId=onnxruntime`). Surfaced and fixed latent build/test/behaviour breaks hidden by the never-run suite (see re-score notes); CoreML `System.gc()` step-hack removed from `Sd15OnnxPipeline`
+- [x] Headless CLI extended + documented honestly — `jforge upscale --model realesrgan --image <path>` routes an input image through the typed API (`JForgeCli.upscaleRequest`); README no longer claims CLI/embeddable-API are "not yet built", documents real flags and the `JForge.create()` snippet; suite now **70 tests, 0 failures**
 
 Blockers:
 
@@ -145,7 +146,7 @@ Blockers:
 
 | Feature | Status | Evidence |
 |---|---|---|
-| CLI (`jforge ...`) | partial | `cli.JForgeCli`: `jforge model list`, `jforge generate` (syntax in place; server/upscale/benchmark subcommands pending) |
+| CLI (`jforge ...`) | partial | `cli.JForgeCli`: `jforge model list`, `jforge generate`, `jforge upscale` (serve/worker/benchmark subcommands pending) |
 | Java embeddable API | implemented | `api.JForge` facade (`try (var forge = JForge.create()) { ... }`) |
 | REST server / workers | planned | none |
 | Plugins / scripting / workflows | planned | none |
