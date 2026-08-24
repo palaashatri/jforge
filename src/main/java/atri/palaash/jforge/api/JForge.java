@@ -73,21 +73,15 @@ public final class JForge implements AutoCloseable {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         ModelRegistry registry = new ModelRegistry();
         ModelStorage storage = new ModelStorage(modelRoot);
-        // TaskType is selected per model in the legacy engine; null disables the
-        // fallback branch that only matters for interaction with the UI.
         GenericOnnxService delegate = new GenericOnnxService(
                 atri.palaash.jforge.model.TaskType.TEXT_TO_IMAGE, storage, executor);
         InferenceService service = delegate;
         LegacyInferencePipeline pipeline = new LegacyInferencePipeline(
-                service, bundle -> resolveBundle(registry, bundle));
+                service, bundle -> registry.allModels().stream()
+                        .filter(d -> d.id().equals(bundle.id()))
+                        .findFirst()
+                        .orElse(null));
         return new JForge(registry, executor, pipeline);
-    }
-
-    private static ModelDescriptor resolveBundle(ModelRegistry registry, ModelBundle bundle) {
-        return registry.allModels().stream()
-                .filter(d -> d.id().equals(bundle.id()))
-                .findFirst()
-                .orElse(null);
     }
 
     /**
@@ -133,7 +127,12 @@ public final class JForge implements AutoCloseable {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(progress, "progress");
         Objects.requireNonNull(cancellation, "cancellation");
-        ModelBundle bundle = bundleFor(request);
+        ModelDescriptor descriptor = findDescriptor(request.modelId());
+        if (descriptor == null) {
+            return GenerationResult.fail(request.modelId(), "Unknown model '"
+                    + request.modelId() + "'. Run 'jforge model list' to see registered models.");
+        }
+        ModelBundle bundle = bundleFor(descriptor, request);
         try (var loaded = pipeline.load(bundle, new OnnxRuntimeBackend(), LoadOptions.DEFAULT)) {
             return pipeline.generate(loaded, request, progress, cancellation);
         } catch (Exception e) {
@@ -141,14 +140,37 @@ public final class JForge implements AutoCloseable {
         }
     }
 
-    private static ModelBundle bundleFor(GenerationRequest request) {
+    private ModelDescriptor findDescriptor(String modelId) {
+        return registry.allModels().stream()
+                .filter(d -> d.id().equals(modelId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Derive the bundle identity from what the registry actually knows:
+     * display name, storage root, source URL, and a family implied by the
+     * task type. Architecture is left empty until real bundle ingestion
+     * (safetensors / Diffusers) lands — the legacy engine still dispatches
+     * by model id internally.
+     */
+    static ModelBundle bundleFor(ModelDescriptor descriptor, GenerationRequest request) {
         return ModelBundle.builder()
-                .id(request.modelId())
-                .architecture("stable-diffusion-1.x")
-                .family("legacy")
+                .id(descriptor.id())
+                .displayName(descriptor.displayName())
+                .family(familyOf(descriptor.taskType()))
+                .componentRoot(descriptor.relativePath())
+                .source(descriptor.sourceUrl())
                 .recommendedSteps(request.steps())
                 .recommendedCfg(request.cfgScale())
                 .build();
+    }
+
+    private static String familyOf(atri.palaash.jforge.model.TaskType taskType) {
+        return switch (taskType) {
+            case TEXT_TO_IMAGE -> "stable-diffusion";
+            case IMAGE_UPSCALE -> "realesrgan";
+        };
     }
 
     private static String messageOf(Throwable e) {

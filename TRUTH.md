@@ -35,7 +35,7 @@ placeholder, or documentation does **not** count as implemented.
 | Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 3 | 70 unit/integration tests green locally (tokenizer, scheduler incl. golden values, API, engine, legacy adapter, CLI parsing); CI `test` job configured but not yet executed; no Windows/macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 3 | 71 unit/integration tests green locally (tokenizer, scheduler incl. golden values, API, engine, legacy adapter, CLI parsing); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -80,6 +80,7 @@ Progress:
 - [x] Regression tests before destructive refactors — tokenizer extraction covered by identical-code regression expectation + `GenericOnnxServiceTest`
 - [x] First full `mvn test` green on branch — portable JDK 21.0.12 + Maven 3.9.9: **67 tests, 0 failures** (`mvn -B test -Dort.artifactId=onnxruntime`). Surfaced and fixed latent build/test/behaviour breaks hidden by the never-run suite (see re-score notes); CoreML `System.gc()` step-hack removed from `Sd15OnnxPipeline`
 - [x] Headless CLI extended + documented honestly — `jforge upscale --model realesrgan --image <path>` routes an input image through the typed API (`JForgeCli.upscaleRequest`); README no longer claims CLI/embeddable-API are "not yet built", documents real flags and the `JForge.create()` snippet; suite now **70 tests, 0 failures**
+- [x] Honest bundle derivation + actionable unknown-model errors — `JForge.generate` resolves the registry descriptor first; unknown ids fail with a message naming the id and pointing at `jforge model list` (was the misleading "model must not be null"); bundles now derive family/displayName/componentRoot/source from what the registry actually knows instead of stamping a fake `"stable-diffusion-1.x"` architecture on every request. Suite **71 tests, 0 failures**; Windows CI test job added (`test-windows`)
 
 Blockers:
 
@@ -180,9 +181,10 @@ Blockers:
 
 ## Known blockers / risks
 
-1. **CI test job not yet executed.** The `test` job exists in the
-   workflow but has not run — the M0 branch needs a PR to `main` to
-   trigger it. Local `mvn test` is green (67 tests).
+1. **CI test jobs not yet executed.** The `test` (Linux) and
+   `test-windows` jobs exist in the workflow but have not run — the M0
+   branch needs a PR to `main` to trigger them. Local `mvn test` is
+   green (71 tests).
 2. **Single-module build.** Acceptable interim per migration rule, but
    module split is pending.
 3. **Legacy adapter fidelity.** Legacy pipelines pick schedulers
