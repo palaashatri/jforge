@@ -50,7 +50,7 @@ public final class SafetensorsHeader {
         return parseJson(json, headerLen);
     }
 
-    static SafetensorsHeader parseJson(String json, long headerLen) throws IOException {
+    public static SafetensorsHeader parseJson(String json, long headerLen) throws IOException {
         ObjectMapper mapper = new ObjectMapper();
         Map<String, Object> raw = mapper.readValue(json, new TypeReference<>() {});
         Map<String, TensorInfo> tensors = new LinkedHashMap<>();

@@ -19,9 +19,9 @@ placeholder, or documentation does **not** count as implemented.
 
 ---
 
-## Current score (re-scored 2026-08-25 — M3 canvas document tranche)
+## Current score (re-scored 2026-08-25 — M4 conditioning tranche)
 
-**Total: 42 / 100**
+**Total: 47 / 100**
 
 | Category | Weight | Score | Notes |
 |---|---|---|---|
@@ -29,13 +29,13 @@ placeholder, or documentation does **not** count as implemented.
 | Model-family coverage | 10 | 6 | SD 1.5 + SDXL + SD 3.x plus safetensors/Diffusers ingestion (SafetensorsHeader, DiffusersIndex, ModelBundleFactory with arch/family/scheduler/license inference); no FLUX/Qwen/Z-Image runtime yet, but bundle abstraction is real |
 | Image generation quality/features | 10 | 4 | Real t2i works; no img2img, no real inpaint/outpaint engine support |
 | Canvas/editing/inpaint/outpaint | 10 | 4 | Canvas document model with 6 layer types (Image/Generation/Mask/Reference/Guide/Group), .jforge versioned JSON persistence, undo/redo (100 depth), add/remove/move/resize/visible/reorder — UI-independent and tested (CanvasDocumentTest); CanvasPanel pan/zoom placeholder still |
-| LoRA/Control/reference conditioning | 10 | 0 | None |
+| LoRA/Control/reference conditioning | 10 | 5 | LoRAMetadata (safetensors header → base/arch/dim/alpha/triggerWords), LoRAStack (multi-LoRA, enable/disable, reorder, strength, family validation), ControlSpec/Preprocessor (Canny/Depth/Pose/Scribble/Seg/Tile/Reference, strength/window, preview) — tested (113 tests) |
 | GPU backends/performance/memory | 10 | 4 | ONNX Runtime EP probing real; CoreML `System.gc()` hack removed; still no benchmark harness or memory estimation |
 | UI/UX/product polish | 15 | 9 | DesignTokens + WorkspaceShell (tool rail/canvas/inspector/filmstrip); InspectorController with capability-driven collapsible sections (prompt history/token count, CFG/neg hidden per pipeline); live GenerationStatusBar; polished ModelManager with filters (Image/Edit/Video/Fast/LowVRAM/Installed) + actions (Use/Show/Verify/Delete); Command Palette (Cmd/Ctrl+K); Developer Console |
 | Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 4 | 103 tests green locally (adds 7 canvas tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 4 | 113 tests green locally (adds 5+5 conditioning tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -61,8 +61,9 @@ placeholder, or documentation does **not** count as implemented.
 - 2026-08-25 M1 polish: inspector capability-driven sections, live status bar, model browser filters/actions, animation + filmstrip wiring; UI 7→9, total 33→35.
 - 2026-08-25 M2 ingestion: safetensors + Diffusers parsers + ModelBundleFactory (11 tests); Model-family 2→6, total 35→39.
 - 2026-08-25 M3 canvas document: sealed Layer types + CanvasDocument with undo/redo + persistence (7 tests); canvas 1→4, total 39→42.
+- 2026-08-25 M4 conditioning: LoRAMetadata/LoRAStack + ControlSpec/Preprocessor (10 tests); LoRA/Control 0→5, total 42→47.
 - Score remains below the M0 target of 30 because M1 (product shell) is
-  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1/M2/M3 have started, but M0's model-level golden verification is still pending.]
+  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1/M2/M3/M4 have started.]
 
 ---
 
@@ -136,6 +137,19 @@ Blockers:
 
 - CanvasPanel still placeholder checkerboard; real tiled rendering, selection/move/resize/rotate, mask painting, drag/drop, variants, before/after, undo/redo UI wiring pending
 - No outpaint (extend canvas → generate into exposed region) or inpaint (mask + source) integration with engine
+
+### M4 — Conditioning (target 75)
+
+Progress:
+
+- [x] LoRA metadata — `lora.LoRAMetadata` (safetensors header → base/arch/dim/alpha/triggerWords, `isValid`) + `lora.LoRAStack` (multi-LoRA, enable/disable, reorder, strength [0,2], family compatibility check via `familyOf`)
+- [x] Control — `control.Preprocessor` (CANNY/DEPTH_MIDAS/DEPTH_LERES/OPENPOSE/SCRIBBLE/SEG/TILE/REFERENCE, `needsPreview`), `control.ControlSpec` (multi-control, strength/window validation, `start < end`, enabled toggle)
+- [x] Tests — `LoRAStackTest` (5: add/reorder, enable/strength, validation, sd15/sdxl metadata + compatibility), `ControlSpecTest` (5: add/validate, bad strength/window, enable, preprocessor lookup) — suite **113 tests, 0 failures**
+
+Blockers:
+
+- LoRA apply/train and ControlNet runtime not yet wired into pipelines; textual inversion and per-block weighting pending
+- IP-Adapter / reference conditioning not yet implemented
 
 ---
 
