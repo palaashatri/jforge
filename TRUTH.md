@@ -19,9 +19,9 @@ placeholder, or documentation does **not** count as implemented.
 
 ---
 
-## Current score (re-scored 2026-08-25 — M1 workspace tranche)
+## Current score (re-scored 2026-08-25 — M1 inspector + model browser tranche)
 
-**Total: 33 / 100**
+**Total: 35 / 100**
 
 | Category | Weight | Score | Notes |
 |---|---|---|---|
@@ -31,11 +31,11 @@ placeholder, or documentation does **not** count as implemented.
 | Canvas/editing/inpaint/outpaint | 10 | 1 | Placeholder infinite canvas with pan/zoom/checkerboard (CanvasPanel) inside new workspace shell; no document model/layers/undo yet |
 | LoRA/Control/reference conditioning | 10 | 0 | None |
 | GPU backends/performance/memory | 10 | 4 | ONNX Runtime EP probing real; CoreML `System.gc()` hack removed; still no benchmark harness or memory estimation |
-| UI/UX/product polish | 15 | 7 | DesignTokens (near-black dark neutrals, spacing/radii/type scale); WorkspaceShell (tool rail + canvas + inspector + filmstrip replaces card nav); Command Palette (Cmd/Ctrl+K); Developer Console (View menu); FlatLaf still, but workspace anatomy is now visible |
+| UI/UX/product polish | 15 | 9 | DesignTokens + WorkspaceShell (tool rail/canvas/inspector/filmstrip); InspectorController with capability-driven collapsible sections (prompt history/token count, CFG/neg hidden per pipeline); live GenerationStatusBar; polished ModelManager with filters (Image/Edit/Video/Fast/LowVRAM/Installed) + actions (Use/Show/Verify/Delete); Command Palette (Cmd/Ctrl+K); Developer Console |
 | Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 4 | 80 tests green locally (adds DesignTokens + WorkspaceShell unit tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 4 | 85 tests green locally (adds inspector tests + workspace tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -97,11 +97,13 @@ Progress:
 - [x] Workspace anatomy — `ui.workspace.WorkspaceShell` (tool rail 48px + canvas + inspector 300px + filmstrip 112px) replaces the Imagine/Enhance/Models card navigation visually; `ToolRail`, `CanvasPanel` (checkerboard, pan via drag, zoom via wheel, fit/100%), `InspectorPanel` (section cards, scroll), `FilmstripPanel` (horizontal strip), `GenerationStatusBar`; MainFrame now assembles the workspace shell while preserving lazy card panels inside the center (no workflow breakage)
 - [x] Command palette — `ui.palette.CommandPalette` (Cmd/Ctrl+K, filterable list, keyboard navigation, 8 commands: view switches, dark mode, dev console, canvas fit/zoom)
 - [x] Developer console — `ui.console.DeveloperConsole` behind View → Developer Console (logs, backend/device/memory/model info, clear)
-- [x] Workspace unit tests — `DesignTokensTest` (scale monotonicity, dimensions, colors/fonts non-null), `WorkspaceShellTest` (shell regions, tool selection, zoom clamping, inspector/filmstrip content) — suite **80 tests, 0 failures**
+- [x] Inspector — capability-driven collapsing sections (`ui.inspector.InspectorController` with `CollapsibleSection`, `SliderField`, `PromptEditor` with token count/history/autocomplete, prompt, negative prompt, steps, CFG, seed, scheduler, resolution); `bindCapabilities` hides CFG/negative prompt when pipeline lacks them (tested by `InspectorControllerTest` — suite **85 tests**)
+- [x] Live generation status — `GenerationStatusBar` (progress, steps, it/s, ETA, device, backend, memory, cancel) wired into `MainFrame` south stack above status bar (idle/progress states; full inference wiring pending pipeline progress callbacks)
+- [x] Model browser polish — `ModelManagerPanel` now has filters (Image/Edit/Video/Fast/Low VRAM/Installed + free-text search, live count) and actions (Use, Show files, Verify, Delete); `ModelTableModel` supports predicate filtering (`setFilter`) and filtered `Available`/`Progress` display
+- [x] Workspace unit tests — `DesignTokensTest` (scale monotonicity, dimensions, colors/fonts non-null), `WorkspaceShellTest` (shell regions, tool selection, zoom clamping, inspector/filmstrip content), `InspectorControllerTest` (prompt/history, slider sync, CFG visibility) — suite **85 tests, 0 failures**
 
 Blockers:
 
-- Inspector still hosts the legacy sidebar + placeholder sections; full migration of form rows (prompt, steps, CFG, seed) into inspector collapsing sections is next
 - Canvas is a placeholder checkerboard, not the infinite canvas with layers/document model/undo/tiles/selection/masks
 - No animation (120–250ms springs) yet; motion must respect reduced-motion
 - Compose Multiplatform migration not started — current shell is Swing/FlatLaf; acceptable per migration rule (package boundaries first), but the product contract requires Compose for the presentation layer — decision to stay on Swing for this tranche is documented here as incremental
@@ -157,8 +159,10 @@ Blockers:
 | Workspace shell | partial | `ui.workspace.WorkspaceShell` + `ToolRail` + `CanvasPanel` + `InspectorPanel` + `FilmstripPanel` + `GenerationStatusBar` |
 | Text-to-image form | implemented | `TextToImagePanel` (still card-based; inspector migration pending) |
 | Upscale form | implemented | `ImageUpscalePanel` |
-| Model manager | implemented | `ModelManagerPanel` |
+| Model manager | implemented | `ModelManagerPanel` with filters (Image/Edit/Video/Fast/LowVRAM/Installed, search, count) + actions (Use/Show files/Verify/Delete) + progress |
 | History gallery | implemented | `HistoryPanel` (filmstrip placeholder added) |
+| Inspector | partial | `ui.inspector.InspectorController` (prompt/history/token count, collapsible Generation/Canvas sections, capability-driven CFG/neg visibility) |
+| Live generation status | partial | `GenerationStatusBar` (steps/it/s/ETA/device/backend/memory/cancel) wired into frame; progress plumbing to pipeline pending |
 | Infinite canvas | partial | `CanvasPanel` checkerboard with pan/zoom/fit; no layers/document/undo/tiles yet |
 | Command palette | implemented | `ui.palette.CommandPalette` (Cmd/Ctrl+K, View menu) |
 | Developer console | implemented | `ui.console.DeveloperConsole` (View → Developer Console, logs/backend/memory) |

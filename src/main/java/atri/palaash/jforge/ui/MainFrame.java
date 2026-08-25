@@ -6,10 +6,13 @@ import atri.palaash.jforge.model.ModelRegistry;
 import atri.palaash.jforge.model.TaskType;
 import atri.palaash.jforge.storage.ModelDownloader;
 import atri.palaash.jforge.storage.ModelStorage;
+import atri.palaash.jforge.engine.PipelineCapabilities;
 import atri.palaash.jforge.ui.console.DeveloperConsole;
+import atri.palaash.jforge.ui.inspector.InspectorController;
 import atri.palaash.jforge.ui.palette.CommandPalette;
 import atri.palaash.jforge.ui.workspace.CanvasPanel;
 import atri.palaash.jforge.ui.workspace.FilmstripPanel;
+import atri.palaash.jforge.ui.workspace.GenerationStatusBar;
 import atri.palaash.jforge.ui.workspace.InspectorPanel;
 import atri.palaash.jforge.ui.workspace.ToolRail;
 import atri.palaash.jforge.ui.workspace.WorkspaceShell;
@@ -73,6 +76,8 @@ public class MainFrame extends JFrame {
 
     /* Workspace shell (M1) */
     private WorkspaceShell workspaceShell;
+    private GenerationStatusBar generationStatusBar;
+    private InspectorController inspectorController;
     private DeveloperConsole developerConsole;
     private boolean devConsoleVisible = false;
 
@@ -181,15 +186,23 @@ public class MainFrame extends JFrame {
         /* Host the card content in the workspace center */
         workspaceShell.setCenterComponent(contentPanel);
 
-        /* Inspector: show legacy sidebar + contextual info */
-        JPanel inspectorContent = new JPanel(new BorderLayout(0, 8));
-        inspectorContent.setBackground(DesignTokens.bgSurface());
-        inspectorContent.add(legacySidebar, BorderLayout.NORTH);
-        JLabel inspHint = new JLabel("<html><body style='width:260px;color:#8A8A94;font-size:11px'>Inspector shows contextual controls for the selected tool and generation. Form rows will migrate here from giant cards.</body></html>");
-        inspHint.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
-        inspectorContent.add(inspHint, BorderLayout.CENTER);
-        workspaceShell.setInspectorContent(inspectorContent);
+        /* Inspector: capability-driven collapsing sections (M1) */
+        inspectorController = new InspectorController();
+        try {
+            PipelineCapabilities defaultCaps = PipelineCapabilities.builder().build();
+            inspectorController.bindCapabilities(defaultCaps);
+        } catch (Exception ignored) {}
+        JPanel inspectorWrapper = new JPanel(new BorderLayout(0, 8));
+        inspectorWrapper.setBackground(DesignTokens.bgSurface());
+        inspectorWrapper.add(legacySidebar, BorderLayout.NORTH);
+        inspectorWrapper.add(inspectorController.getView(), BorderLayout.CENTER);
+        workspaceShell.setInspectorContent(inspectorWrapper);
         workspaceShell.getFilmstrip().setInfo("History — generating shows here");
+        workspaceShell.getCanvas().setToolTipText("Canvas: drag to pan, wheel to zoom, double-click Fit");
+
+        /* Live generation status bar (M1) */
+        generationStatusBar = new GenerationStatusBar();
+        generationStatusBar.setIdle("Ready — " + detectEpInfo());
 
         /* Developer console (hidden, toggled via View menu) */
         developerConsole = new DeveloperConsole();
@@ -200,8 +213,9 @@ public class MainFrame extends JFrame {
         JPanel root = new JPanel(new BorderLayout());
         root.add(workspaceShell, BorderLayout.CENTER);
         JPanel southStack = new JPanel(new BorderLayout());
-        southStack.add(statusBarLabel, BorderLayout.NORTH);
-        southStack.add(developerConsole, BorderLayout.CENTER);
+        southStack.add(generationStatusBar, BorderLayout.NORTH);
+        southStack.add(statusBarLabel, BorderLayout.CENTER);
+        southStack.add(developerConsole, BorderLayout.SOUTH);
         root.add(southStack, BorderLayout.SOUTH);
         setContentPane(root);
 
