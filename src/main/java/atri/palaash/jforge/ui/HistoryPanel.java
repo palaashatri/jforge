@@ -4,11 +4,15 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
+import atri.palaash.jforge.ui.design.DesignTokens;
+
+import javax.swing.BorderFactory;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.JPanel;
 import javax.swing.table.AbstractTableModel;
 import java.awt.BorderLayout;
+import java.util.function.Consumer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -35,16 +39,28 @@ public class HistoryPanel extends JPanel {
 
     /** The table model backing the visible JTable. */
     private final HistoryTableModel tableModel;
+    private Consumer<HistoryEntry> onEntryAdded;
 
     /** Build the panel with a single scrollable table. */
     public HistoryPanel() {
         super(new BorderLayout());
+        setBackground(DesignTokens.bgSurface());
         this.tableModel = new HistoryTableModel();
         JTable table = new JTable(tableModel);
         table.setFillsViewportHeight(true);
-        table.setRowHeight(24);
-        add(new JScrollPane(table), BorderLayout.CENTER);
+        table.setRowHeight(28);
+        table.setShowHorizontalLines(true);
+        table.setShowVerticalLines(false);
+        table.setIntercellSpacing(new java.awt.Dimension(0, 1));
+        table.getTableHeader().setFont(DesignTokens.fontTiny());
+        table.setFont(DesignTokens.fontCaption());
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.getViewport().setBackground(DesignTokens.bgSurface());
+        add(scroll, BorderLayout.CENTER);
     }
+
+    public void setOnEntryAdded(Consumer<HistoryEntry> listener) { this.onEntryAdded = listener; }
 
     /** Lazily load history from disk (call after panel becomes visible). */
     public void load() {
@@ -60,7 +76,10 @@ public class HistoryPanel extends JPanel {
     public void addEntry(HistoryEntry entry) {
         tableModel.addEntry(entry);
         saveToDisk();
+        if (onEntryAdded != null) onEntryAdded.accept(entry);
     }
+
+    public int entryCount() { return tableModel.getRowCount(); }
 
     /* ---- persistence ---- */
 

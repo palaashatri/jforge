@@ -1,5 +1,6 @@
 package atri.palaash.jforge.ui.inspector;
 
+import atri.palaash.jforge.ui.animation.Motion;
 import atri.palaash.jforge.ui.design.DesignTokens;
 
 import javax.swing.*;
@@ -42,11 +43,28 @@ public class CollapsibleSection extends JPanel {
     }
 
     public void setExpanded(boolean e) {
+        if (this.expanded == e) return;
         this.expanded = e;
         String t = headerButton.getText().substring(2);
         headerButton.setText((expanded ? "▾ " : "▸ ") + t);
-        content.setVisible(expanded);
-        revalidate(); repaint();
+        if (Motion.isReducedMotion()) {
+            content.setVisible(expanded);
+            revalidate(); repaint();
+            Container p = getParent();
+            if (p != null) { p.revalidate(); p.repaint(); }
+            return;
+        }
+        if (expanded) {
+            content.setVisible(true);
+            content.setOpaque(false);
+            Motion.animate(Motion.DURATION_MEDIUM, 0f, 1f, alpha -> {
+                content.setVisible(true);
+                revalidate();
+            }, () -> { revalidate(); repaint(); });
+        } else {
+            Motion.animate(Motion.DURATION_FAST, 1f, 0f, alpha -> {},
+                () -> { content.setVisible(false); revalidate(); repaint(); });
+        }
         Container p = getParent();
         if (p != null) { p.revalidate(); p.repaint(); }
     }

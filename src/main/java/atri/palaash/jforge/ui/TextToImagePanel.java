@@ -91,6 +91,7 @@ public class TextToImagePanel extends JPanel {
     private final JTextPane logArea;
     private final PromptLibraryPanel promptLibraryPanel;
     private final HistoryPanel historyPanel;
+    public HistoryPanel getHistoryPanel() { return historyPanel; }
 
     /* Advanced disclosure */
     private final JToggleButton advancedToggle;

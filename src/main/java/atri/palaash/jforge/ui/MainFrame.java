@@ -33,6 +33,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingConstants;
 import javax.swing.UIManager;
 import javax.swing.border.Border;
 import java.awt.BorderLayout;
@@ -199,6 +200,30 @@ public class MainFrame extends JFrame {
         workspaceShell.setInspectorContent(inspectorWrapper);
         workspaceShell.getFilmstrip().setInfo("History — generating shows here");
         workspaceShell.getCanvas().setToolTipText("Canvas: drag to pan, wheel to zoom, double-click Fit");
+        if (textToImagePanel != null) {
+            textToImagePanel.getHistoryPanel().setOnEntryAdded(entry -> {
+                JPanel thumb = new JPanel(new BorderLayout(2,2));
+                thumb.setPreferredSize(new Dimension(88, 72));
+                thumb.setBackground(DesignTokens.bgSurfaceRaised());
+                thumb.setBorder(BorderFactory.createLineBorder(DesignTokens.borderSeparator(), 1, true));
+                thumb.setToolTipText(entry.prompt() + " — " + entry.model());
+                JLabel top = new JLabel(entry.model(), SwingConstants.CENTER);
+                top.setFont(DesignTokens.fontTiny());
+                top.setForeground(DesignTokens.fgMuted());
+                top.setBorder(BorderFactory.createEmptyBorder(4, 4, 2, 4));
+                JLabel mid = new JLabel(entry.prompt().length() > 22 ? entry.prompt().substring(0,22)+"…" : entry.prompt(), SwingConstants.CENTER);
+                mid.setFont(DesignTokens.fontCaption());
+                mid.setForeground(DesignTokens.fgPrimary());
+                JLabel bot = new JLabel(entry.status(), SwingConstants.CENTER);
+                bot.setFont(DesignTokens.fontCaption());
+                bot.setForeground(entry.status().equals("OK") ? DesignTokens.success() : DesignTokens.error());
+                thumb.add(top, BorderLayout.NORTH);
+                thumb.add(mid, BorderLayout.CENTER);
+                thumb.add(bot, BorderLayout.SOUTH);
+                workspaceShell.getFilmstrip().addThumb(thumb);
+                workspaceShell.getFilmstrip().setInfo(textToImagePanel.getHistoryPanel().entryCount() + " generations");
+            });
+        }
 
         /* Live generation status bar (M1) */
         generationStatusBar = new GenerationStatusBar();
