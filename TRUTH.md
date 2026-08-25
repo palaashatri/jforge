@@ -19,9 +19,9 @@ placeholder, or documentation does **not** count as implemented.
 
 ---
 
-## Current score (re-scored 2026-08-25 — M4 conditioning tranche)
+## Current score (re-scored 2026-08-25 — M5 performance tranche)
 
-**Total: 47 / 100**
+**Total: 52 / 100**
 
 | Category | Weight | Score | Notes |
 |---|---|---|---|
@@ -30,12 +30,12 @@ placeholder, or documentation does **not** count as implemented.
 | Image generation quality/features | 10 | 4 | Real t2i works; no img2img, no real inpaint/outpaint engine support |
 | Canvas/editing/inpaint/outpaint | 10 | 4 | Canvas document model with 6 layer types (Image/Generation/Mask/Reference/Guide/Group), .jforge versioned JSON persistence, undo/redo (100 depth), add/remove/move/resize/visible/reorder — UI-independent and tested (CanvasDocumentTest); CanvasPanel pan/zoom placeholder still |
 | LoRA/Control/reference conditioning | 10 | 5 | LoRAMetadata (safetensors header → base/arch/dim/alpha/triggerWords), LoRAStack (multi-LoRA, enable/disable, reorder, strength, family validation), ControlSpec/Preprocessor (Canny/Depth/Pose/Scribble/Seg/Tile/Reference, strength/window, preview) — tested (113 tests) |
-| GPU backends/performance/memory | 10 | 4 | ONNX Runtime EP probing real; CoreML `System.gc()` hack removed; still no benchmark harness or memory estimation |
+| GPU backends/performance/memory | 10 | 7 | MemoryManager (estimate/fits/tracking/eviction, LOW/BALANCED/PERFORMANCE) + BenchmarkHarness (steps/s, avg, peak) real and tested; EP probing remains |
 | UI/UX/product polish | 15 | 9 | DesignTokens + WorkspaceShell (tool rail/canvas/inspector/filmstrip); InspectorController with capability-driven collapsible sections (prompt history/token count, CFG/neg hidden per pipeline); live GenerationStatusBar; polished ModelManager with filters (Image/Edit/Video/Fast/LowVRAM/Installed) + actions (Use/Show/Verify/Delete); Command Palette (Cmd/Ctrl+K); Developer Console |
-| Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
+| Training/model tooling | 5 | 3 | TrainingConfig + DatasetValidator + TrainingWorkspace (checkpoint/resume, validation, mixed precision, optimizer) tested; PyTorch→ONNX still |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 4 | 113 tests green locally (adds 5+5 conditioning tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 4 | 124 tests green locally (adds memory/benchmark/training tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -62,8 +62,9 @@ placeholder, or documentation does **not** count as implemented.
 - 2026-08-25 M2 ingestion: safetensors + Diffusers parsers + ModelBundleFactory (11 tests); Model-family 2→6, total 35→39.
 - 2026-08-25 M3 canvas document: sealed Layer types + CanvasDocument with undo/redo + persistence (7 tests); canvas 1→4, total 39→42.
 - 2026-08-25 M4 conditioning: LoRAMetadata/LoRAStack + ControlSpec/Preprocessor (10 tests); LoRA/Control 0→5, total 42→47.
+- 2026-08-25 M5 performance: MemoryManager + BenchmarkHarness + TrainingWorkspace (11 tests); GPU 4→7, Training 1→3, total 47→52.
 - Score remains below the M0 target of 30 because M1 (product shell) is
-  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1/M2/M3/M4 have started.]
+  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1/M2/M3/M4/M5 have started.]
 
 ---
 
@@ -150,6 +151,20 @@ Blockers:
 
 - LoRA apply/train and ControlNet runtime not yet wired into pipelines; textual inversion and per-block weighting pending
 - IP-Adapter / reference conditioning not yet implemented
+
+### M5 — Performance & training (target 84)
+
+Progress:
+
+- [x] Memory manager — `memory.MemoryEstimate` + `MemoryManager` (LOW/BALANCED/PERFORMANCE, estimate from bundle minimumMemory + width*height*batch*steps, canFit, track/evict, parseMemory GB/MB)
+- [x] Benchmark harness — `perf.BenchmarkResult` (steps/s, avg, peak) + `perf.BenchmarkHarness` (benchmark() with JForge, average())
+- [x] LoRA training workspace — `training.TrainingConfig` (resolution/batch/lr/optimizer/epochs, validation, totalSteps), `training.DatasetValidator` (image/caption counts, missing detection), `training.TrainingWorkspace` (checkpoint every N, save/resume JSON)
+- [x] Tests — `MemoryManagerTest` (4), `BenchmarkTest` (3), `TrainingTest` (4) — suite **124 tests, 0 failures**
+
+Blockers:
+
+- No quantization runtime yet; VAE tiling / attention slicing not yet integrated
+- Training is workspace/validation only; actual optimizer loop not yet wired to engine
 
 ---
 
