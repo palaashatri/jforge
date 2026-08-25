@@ -1,0 +1,2720 @@
+# JForge — One-Shot Production Transformation Goal
+
+You are the principal engineer, inference-runtime engineer, GPU-performance engineer, desktop-product engineer, UI/UX designer, QA engineer, and release engineer responsible for transforming:
+
+https://github.com/palaashatri/jforge
+
+from its current state into a **production-grade, cross-platform local generative-media workstation that is at least competitive with Draw Things in functionality and substantially better in cross-platform desktop support, extensibility, JVM integration, workflow flexibility, hardware coverage, and developer ergonomics.**
+
+This is **not** a prototype task.
+
+Do not merely redesign screenshots.
+Do not merely refactor code.
+Do not merely add placeholder menu items.
+Do not merely document missing functionality.
+Do not claim features that are not implemented and independently validated.
+
+The final product must actually work.
+
+---
+
+# 0. PRIMARY PRODUCT GOAL
+
+JForge should become:
+
+> **A professional, local-first generative media workstation and embeddable JVM inference platform for Windows, Linux, and macOS.**
+
+It should combine the accessibility and polished creative workflow of applications such as Draw Things with:
+
+- excellent NVIDIA support;
+- excellent AMD support;
+- excellent Intel GPU support;
+- excellent Apple Silicon support;
+- Windows/Linux/macOS parity;
+- a Java API;
+- CLI operation;
+- headless/server operation;
+- remote workers;
+- plugins;
+- scripting;
+- reusable workflows;
+- reproducible generation manifests;
+- serious local model management;
+- local image generation;
+- editing;
+- LoRA;
+- ControlNet;
+- model training;
+- quantization;
+- video generation;
+- professional UI/UX.
+
+Draw Things is a **product-quality benchmark**, not a source-code dependency.
+
+JForge is MIT licensed.
+
+## Clean-room requirement
+
+Do NOT copy GPL or otherwise license-incompatible implementation code from Draw Things or any other project.
+
+Feature concepts and public research algorithms may be independently implemented.
+
+Preserve JForge's MIT compatibility.
+
+---
+
+# 1. BEFORE CHANGING CODE: AUDIT THE REPOSITORY
+
+Inspect the complete repository.
+
+Read:
+
+- all Java/Kotlin code;
+- build files;
+- tests;
+- GitHub Actions;
+- current model registry;
+- inference code;
+- model downloading/conversion code;
+- UI code;
+- storage code;
+- README;
+- existing issues;
+- generated artifacts if present.
+
+Build and run the current application.
+
+Establish a truthful baseline.
+
+Specifically inspect known architectural problems including:
+
+- the enormous `GenericOnnxService`;
+- model-specific branching inside a supposedly generic inference class;
+- conflation of batch size and inference steps;
+- weak typing of inference requests;
+- UI knowledge leaking into engine semantics;
+- scheduler logic embedded in model pipelines;
+- provider logic mixed with inference orchestration;
+- tokenizer implementations mixed into the core service;
+- session caching mixed into pipeline code;
+- Swing forms driving the product architecture;
+- workflow navigation centered around `Imagine / Enhance / Models`;
+- Output/History/Library/Log tab-based design;
+- insufficient real inference tests;
+- limited task abstraction;
+- insufficient memory-management abstraction;
+- insufficient hardware benchmarking;
+- weak model capability metadata.
+
+Do not assume the README is correct.
+
+Verify implementation claims against source and runtime behavior.
+
+---
+
+# 2. CREATE THREE SOURCE-OF-TRUTH DOCUMENTS
+
+Maintain:
+
+```text
+AGENTS.md
+README.md
+TRUTH.md
+```
+
+## AGENTS.md
+
+Define the full final product architecture, milestones, engineering rules, UI specification, QA gates, supported model families, supported hardware, and acceptance criteria.
+
+Treat AGENTS.md as the immutable end-state product contract unless a genuine technical impossibility is discovered.
+
+## TRUTH.md
+
+TRUTH.md is the live readiness ledger.
+
+It must contain:
+
+- current total score /100;
+- functionality score;
+- inference correctness score;
+- UI/UX score;
+- model coverage score;
+- hardware/backend score;
+- image-editing score;
+- training score;
+- video score;
+- API/CLI/server score;
+- reliability score;
+- testing score;
+- packaging/release score;
+- accessibility score;
+- known blockers;
+- evidence for completed functionality.
+
+Never inflate the score.
+
+## README.md
+
+README should describe **what actually works now**, not future intentions.
+
+---
+
+# 3. PRODUCT COMPLETION RUBRIC
+
+Use this weighted rubric.
+
+```text
+Inference architecture & correctness       15
+Model-family coverage                      10
+Image generation quality/features          10
+Canvas/editing/inpaint/outpaint             10
+LoRA/Control/reference conditioning         10
+GPU backends/performance/memory             10
+UI/UX/product polish                        15
+Training/model tooling                       5
+Video/media workflows                        5
+CLI/API/server/plugins/workflows             5
+QA/reliability/release/accessibility         5
+------------------------------------------------
+TOTAL                                      100
+```
+
+100/100 means the product is genuinely shippable.
+
+A feature cannot earn full points merely because interfaces or placeholders exist.
+
+---
+
+# 4. IMMEDIATE ARCHITECTURAL REFACTOR
+
+The existing monolithic inference design must not continue growing.
+
+Break the application into explicit modules or clearly separated packages.
+
+Target architecture:
+
+```text
+jforge-api
+jforge-engine
+jforge-models
+jforge-backend-ort
+jforge-backend-metal
+jforge-backend-cuda
+jforge-backend-openvino
+jforge-control
+jforge-lora
+jforge-training
+jforge-canvas
+jforge-video
+jforge-storage
+jforge-server
+jforge-cli
+jforge-desktop
+```
+
+A Maven multi-module build is acceptable.
+
+If repository size/complexity makes an immediate multi-module conversion unnecessarily disruptive, establish equivalent package/service boundaries first and migrate incrementally.
+
+---
+
+# 5. REMOVE `GenericOnnxService` AS THE GOD OBJECT
+
+Do not continue inserting model-specific pipelines into one enormous service.
+
+Replace it with abstractions approximately equivalent to:
+
+```java
+public interface GenerationPipeline {
+    PipelineDescriptor descriptor();
+
+    PipelineCapabilities capabilities();
+
+    LoadedPipeline load(
+        ModelBundle model,
+        ComputeBackend backend,
+        LoadOptions options
+    ) throws Exception;
+
+    GenerationResult generate(
+        LoadedPipeline pipeline,
+        GenerationRequest request,
+        ProgressListener progress,
+        CancellationToken cancellation
+    ) throws Exception;
+}
+```
+
+Create separate implementations such as:
+
+```text
+StableDiffusion15Pipeline
+StableDiffusionXLPipeline
+StableDiffusion3Pipeline
+FluxPipeline
+QwenImagePipeline
+ZImagePipeline
+ImageUpscalePipeline
+VideoDiffusionPipeline
+```
+
+Shared functionality belongs in reusable engine components.
+
+---
+
+# 6. FIX GENERATION REQUEST SEMANTICS
+
+Do not overload unrelated values.
+
+There must be explicit typed fields for:
+
+```text
+steps
+batchSize
+seed
+width
+height
+cfgScale
+scheduler
+sampler
+clipSkip
+denoiseStrength
+inputImage
+mask
+LoRAs
+control inputs
+reference images
+VAE
+precision
+quantization
+output count
+device/backend
+```
+
+Example direction:
+
+```java
+public record GenerationRequest(
+    Prompt prompt,
+    Prompt negativePrompt,
+
+    int width,
+    int height,
+
+    int steps,
+    int batchSize,
+
+    long seed,
+
+    double cfgScale,
+    double denoiseStrength,
+
+    SchedulerType scheduler,
+
+    Optional<ImageInput> inputImage,
+    Optional<ImageMask> mask,
+
+    List<LoRAConfig> loras,
+    List<ControlInput> controls,
+    List<ReferenceImage> references,
+
+    GenerationOptions options
+) {}
+```
+
+Do not allow the UI to infer pipeline semantics.
+
+---
+
+# 7. PIPELINE CAPABILITY SYSTEM
+
+Every pipeline/model must declare capabilities.
+
+Example:
+
+```text
+TEXT_TO_IMAGE
+IMAGE_TO_IMAGE
+INPAINT
+OUTPAINT
+NEGATIVE_PROMPT
+CFG
+LORA
+CONTROLNET
+REFERENCE_IMAGE
+IP_ADAPTER
+CLIP_SKIP
+CUSTOM_VAE
+TRAINING
+QUANTIZATION
+VIDEO
+AUDIO
+```
+
+The UI must be generated contextually from these capabilities.
+
+If a model does not support negative prompts, hide the control.
+
+If a distilled model does not meaningfully use CFG, do not expose misleading CFG configuration.
+
+If a model supports ControlNet, expose it.
+
+Avoid hard-coded model-name conditionals throughout the UI.
+
+---
+
+# 8. MODEL BUNDLE ARCHITECTURE
+
+Model representation must no longer revolve around arbitrary file paths.
+
+Create a proper `ModelBundle` abstraction containing:
+
+```text
+architecture
+model family
+diffusion transformer / UNet
+text encoders
+tokenizers
+VAE
+scheduler defaults
+quantization
+precision
+supported tasks
+license
+source
+hashes
+metadata
+trigger words
+recommended settings
+minimum memory
+```
+
+Support native ingestion of common generative-model layouts.
+
+Implement robust support for:
+
+```text
+safetensors
+Diffusers model_index.json
+config.json
+tokenizer.json
+SentencePiece
+ONNX
+external tensor files
+LoRA safetensors
+ControlNet
+textual inversion
+custom VAEs
+quantized model metadata
+```
+
+PyTorch→ONNX conversion may remain available but must not be the sole architecture for supporting arbitrary models.
+
+---
+
+# 9. MODEL SOURCES
+
+Create an extensible model-source interface.
+
+Support at minimum:
+
+```text
+Hugging Face
+Local filesystem
+Manual import
+URL import
+```
+
+Design extension points so CivitAI or other registries can be added cleanly later where legally and technically appropriate.
+
+Model installation must include:
+
+- download resume;
+- checksum validation;
+- disk-space validation;
+- license metadata;
+- dependency resolution;
+- progress;
+- cancellation;
+- retry;
+- corrupt-download detection;
+- clean uninstall;
+- model update detection;
+- duplicate detection.
+
+---
+
+# 10. MODERN IMAGE MODEL SUPPORT
+
+Do not focus development exclusively on SD 1.5.
+
+Establish working, validated support for representative modern architectures including, where model licenses and publicly available weights permit:
+
+```text
+Stable Diffusion 1.x
+Stable Diffusion XL
+Stable Diffusion 3.x
+FLUX-family models
+Qwen Image-family models
+Z-Image-family models
+other significant open-weight image architectures discovered during implementation
+```
+
+Architect the engine so new transformer-based diffusion models can be implemented without rewriting unrelated systems.
+
+Model support claims require actual generation tests.
+
+---
+
+# 11. SCHEDULER/SAMPLER ARCHITECTURE
+
+Schedulers must be separate reusable engine objects.
+
+Create tested implementations as appropriate for supported architectures.
+
+Examples may include:
+
+```text
+Euler
+Euler ancestral
+DDIM
+DPM++
+Flow Match Euler
+LCM
+architecture-specific distilled schedules
+```
+
+Do not blindly expose schedulers that are incompatible with a model.
+
+Capability metadata should specify supported/recommended schedulers.
+
+---
+
+# 12. RANDOMNESS AND REPRODUCIBILITY
+
+Implement deterministic seeded generation to the extent realistically possible per backend.
+
+Every output should have a complete metadata manifest recording:
+
+```text
+JForge version
+model ID
+model hash
+VAE hash
+LoRA hashes
+Control model hashes
+prompt
+negative prompt
+seed
+scheduler
+steps
+CFG
+resolution
+denoise strength
+precision
+backend
+device
+generation time
+JVM version
+```
+
+Allow:
+
+```text
+Copy generation settings
+Recreate generation
+Export manifest
+Import manifest
+```
+
+---
+
+# 13. PROFESSIONAL GPU BACKEND ABSTRACTION
+
+Keep ONNX Runtime for broad compatibility.
+
+Create a backend SPI:
+
+```java
+public interface ComputeBackend {
+    BackendDescriptor descriptor();
+
+    boolean supports(Device device, ModelBundle model);
+
+    BackendSession load(...);
+
+    MemoryInfo memoryInfo();
+
+    PerformanceCapabilities capabilities();
+}
+```
+
+Initial backend matrix:
+
+```text
+ONNX Runtime
+  CPU
+  CoreML
+  CUDA
+  TensorRT
+  DirectML
+  OpenVINO
+  ROCm where available
+```
+
+Design native specialized backends for future/hot-path use:
+
+```text
+Metal
+CUDA
+```
+
+Do not prematurely rewrite the entire engine in native code.
+
+Profile first.
+
+Replace hot operations only where measured benefits justify it.
+
+---
+
+# 14. HARDWARE AUTO-DETECTION
+
+Enumerate usable devices.
+
+Display:
+
+```text
+device name
+backend
+total VRAM/unified memory
+available memory
+driver/runtime
+supported precision
+recommended quantization
+estimated model compatibility
+```
+
+Example:
+
+```text
+NVIDIA GeForce RTX 3080
+CUDA
+10 GB VRAM
+FP32 / FP16
+Recommended: Q5/Q6 for very large models
+```
+
+On a multi-GPU or multi-backend system allow explicit device selection.
+
+---
+
+# 15. MEMORY MANAGER
+
+Implement deliberate model memory management.
+
+Required:
+
+- accurate model-memory estimation;
+- controlled unloading;
+- model component eviction;
+- session lifetime management;
+- CPU↔GPU offload where appropriate;
+- sequential loading;
+- VAE tiling;
+- attention slicing where appropriate;
+- tiled upscale;
+- configurable memory modes;
+- OOM recovery;
+- useful error reporting.
+
+Do not use `System.gc()` as the primary GPU memory management mechanism.
+
+---
+
+# 16. QUANTIZATION
+
+Build quantization as a first-class concept.
+
+Support useful formats according to backend/model feasibility.
+
+Target concepts:
+
+```text
+FP32
+FP16
+BF16
+INT8
+common low-bit weight quantization
+mixed precision
+```
+
+Do not claim low-bit support without validated kernels/runtime support.
+
+Model Manager should show quantization and expected memory requirements.
+
+---
+
+# 17. LO-RA INFERENCE
+
+Implement proper LoRA support.
+
+Required:
+
+- LoRA import;
+- validation;
+- metadata;
+- trigger words;
+- adjustable strength;
+- multiple simultaneous LoRAs;
+- enable/disable;
+- drag reorder;
+- compatibility checking;
+- model-family validation;
+- saved LoRA combinations;
+- export/import presets.
+
+Where architecture permits, support per-block weighting.
+
+---
+
+# 18. CONTROL AND REFERENCE CONDITIONING
+
+Implement a general conditioning architecture.
+
+Support representative controls such as:
+
+```text
+Canny
+Depth
+Pose
+Scribble
+Segmentation
+Tile
+Reference image
+IP-Adapter-style reference conditioning where supported
+```
+
+Allow multiple simultaneous controls when the underlying pipeline supports them.
+
+Each control should expose:
+
+```text
+strength
+start/end percentage
+preprocessor
+preview
+enable toggle
+```
+
+---
+
+# 19. IMAGE-TO-IMAGE
+
+Implement real image-to-image generation.
+
+Users should be able to:
+
+- drag an image onto the canvas;
+- use it as a generation source;
+- configure denoise strength;
+- preserve resolution/aspect;
+- generate variants;
+- compare before/after.
+
+---
+
+# 20. INPAINTING
+
+Implement proper masking.
+
+Required:
+
+```text
+brush
+eraser
+brush size
+softness
+opacity
+mask invert
+clear mask
+show/hide mask
+feather
+grow/shrink
+```
+
+The generation engine must receive the actual mask and source image.
+
+Do not implement a fake UI-only mask.
+
+---
+
+# 21. OUTPAINTING
+
+Outpainting should be integrated into the canvas.
+
+The user should be able to extend the canvas beyond the current image and generate into the newly exposed region.
+
+Avoid forcing the user through a separate "Outpaint" form.
+
+---
+
+# 22. INFINITE CANVAS
+
+This is a major product requirement.
+
+Replace the existing output-preview-centric workflow with a genuine creative canvas.
+
+The canvas should support:
+
+```text
+infinite pan
+zoom
+trackpad gestures
+mouse-wheel zoom
+fit-to-view
+100% zoom
+selection
+move
+resize
+rotate where applicable
+crop
+mask painting
+drag/drop
+copy/paste
+multiple images
+generated variants
+reference images
+before/after
+undo/redo
+```
+
+Large images must not destroy responsiveness.
+
+Implement tiled rendering / GPU acceleration where appropriate.
+
+---
+
+# 23. LAYERS / DOCUMENT MODEL
+
+Create a document representation.
+
+Potential entities:
+
+```text
+ImageLayer
+GenerationLayer
+MaskLayer
+ReferenceLayer
+GuideLayer
+GroupLayer
+```
+
+At minimum support enough structure to allow:
+
+- non-destructive editing;
+- generated variants;
+- undo;
+- history;
+- masks;
+- references;
+- multiple images on canvas.
+
+Persist projects.
+
+Example extension:
+
+```text
+.jforge
+```
+
+Project format should be documented and preferably versioned.
+
+---
+
+# 24. UNDO / REDO
+
+All user-visible destructive document operations should participate in an undo system.
+
+Examples:
+
+```text
+move
+resize
+delete
+mask stroke
+crop
+generation placement
+layer creation/deletion
+property changes
+```
+
+Keyboard:
+
+```text
+Cmd/Ctrl+Z
+Cmd/Ctrl+Shift+Z
+```
+
+---
+
+# 25. COMPLETELY REDESIGN THE DESKTOP UI
+
+The existing Swing form-centric UI is not the desired final product.
+
+Do not merely reskin existing `JPanel` forms.
+
+Replace the existing mental model.
+
+Target product design:
+
+> Zed-like density + Pixelmator-like polish + Lightroom-like inspector clarity + Draw Things-style local generation workflow.
+
+JForge should look like a serious GPU creative workstation.
+
+---
+
+# 26. UI TECHNOLOGY
+
+Strongly consider:
+
+```text
+Compose Multiplatform Desktop / Kotlin JVM
+```
+
+for the desktop presentation layer while retaining the inference/runtime/API in Java.
+
+Recommended separation:
+
+```text
+Java:
+  engine
+  API
+  models
+  backends
+  training
+  storage
+  CLI/server
+
+Kotlin/Compose:
+  desktop UI
+```
+
+If another JVM-native technology proves materially better, document the decision.
+
+Do NOT rewrite the inference engine into JavaScript/Electron.
+
+The product must remain a JVM-centric application.
+
+---
+
+# 27. NEW MAIN WORKSPACE
+
+The primary window should approximately follow:
+
+```text
+┌───────────────────────────────────────────────────────────────────────┐
+│ JForge    Project ▼       Undo  Redo       Device ▼       Generate   │
+├──────────┬────────────────────────────────────────┬───────────────────┤
+│          │                                        │ MODEL             │
+│ Select   │                                        │ FLUX ...       ▾ │
+│ Move     │                                        │                   │
+│ Brush    │                                        │ PROMPT            │
+│ Mask     │              CANVAS                    │ ┌───────────────┐ │
+│ Erase    │                                        │ │               │ │
+│ Crop     │                                        │ └───────────────┘ │
+│          │                                        │                   │
+│          │                                        │ LoRA           + │
+│          │                                        │ Controls       + │
+│          │                                        │ References     + │
+│          │                                        │                   │
+│          │                                        │ Generation       │
+├──────────┴────────────────────────────────────────┴───────────────────┤
+│ Generation/version filmstrip                                         │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+This is conceptual, not a pixel-perfect mandate.
+
+Optimize the real design through visual QA.
+
+---
+
+# 28. INSPECTOR
+
+Replace giant rows of Swing form fields with a compact contextual inspector.
+
+Example:
+
+```text
+Generation
+
+Model           FLUX ...              ▾
+Sampler         Euler                 ▾
+
+Steps           ━━━━━━●━━━━       24
+Guidance        ━━━●━━━━━━        3.5
+
+Size            1024 × 1024
+Seed            Random              ↻
+```
+
+Group advanced controls.
+
+Allow collapsing sections.
+
+Use sliders where useful but preserve exact numeric editing.
+
+---
+
+# 29. PROMPT EXPERIENCE
+
+Prompt entry must be a first-class experience.
+
+Implement:
+
+- multiline prompt editor;
+- prompt history;
+- autocomplete where useful;
+- style/preset insertion;
+- token count if meaningful;
+- drag/drop reference support;
+- keyboard generation shortcut;
+- expandable negative prompt only when relevant;
+- saved prompt presets;
+- prompt search;
+- recent prompts.
+
+Do not waste large permanent screen areas on controls irrelevant to the selected model.
+
+---
+
+# 30. GENERATION SHOULD FEEL LIVE
+
+During generation display:
+
+```text
+progress
+step count
+iterations/sec
+elapsed time
+ETA
+device
+backend
+VRAM/unified-memory use
+cancel
+```
+
+Where technically reasonable, periodically decode low-cost intermediate previews.
+
+The canvas should visually refine during generation.
+
+Do not make users stare at log strings.
+
+---
+
+# 31. GENERATION FILMSTRIP
+
+History should not primarily live behind a tab.
+
+Display recent generations in a filmstrip/timeline below the canvas.
+
+Each result should allow:
+
+```text
+select
+compare
+reuse settings
+reuse seed
+send to canvas
+set as img2img input
+create variation
+upscale
+delete
+export
+metadata
+```
+
+Persist generation history.
+
+---
+
+# 32. DEVELOPER LOGS
+
+Move raw runtime logs out of the primary workflow.
+
+Expose a developer console via something like:
+
+```text
+View → Developer Console
+```
+
+Include:
+
+```text
+runtime logs
+backend information
+model loading
+memory statistics
+exceptions
+diagnostics
+```
+
+Average users should not need to interpret ONNX Runtime output.
+
+---
+
+# 33. MODEL BROWSER UI
+
+Redesign model management into a visual browser.
+
+Each model should show:
+
+```text
+name
+preview if available
+architecture
+capabilities
+size
+quantization
+license
+source
+install state
+estimated memory
+compatible devices
+recommended settings
+```
+
+Support filters:
+
+```text
+Image
+Edit
+Video
+Fast
+Low VRAM
+LoRA
+Control
+Trainable
+Installed
+```
+
+Actions:
+
+```text
+Install
+Use
+Update
+Show files
+Verify
+Delete
+```
+
+Downloading models should feel like a proper application-store/install experience, not a dependency downloader.
+
+---
+
+# 34. DESIGN SYSTEM
+
+Create a reusable JForge design system.
+
+Define:
+
+```text
+spacing
+corner radii
+type scale
+icon sizes
+surface hierarchy
+hover
+pressed
+selected
+disabled
+focus
+warning
+error
+success
+tooltips
+menus
+dialogs
+sheet/panel behavior
+```
+
+Favor:
+
+- near-black/dark neutral surfaces;
+- subtle elevation;
+- restrained separators;
+- compact controls;
+- excellent typography;
+- high information density;
+- consistent iconography;
+- clear hierarchy.
+
+Avoid:
+
+- giant cards everywhere;
+- excessive gradients;
+- random rounded rectangles;
+- inconsistent padding;
+- huge headings;
+- web-dashboard aesthetics;
+- toy-like AI branding.
+
+---
+
+# 35. ANIMATION SYSTEM
+
+Add smooth purposeful motion.
+
+Examples:
+
+```text
+sidebar collapse
+inspector section expansion
+generation result insertion
+canvas zoom
+selection changes
+model switching
+modal appearance
+toast appearance
+progress transitions
+before/after transitions
+tool state
+```
+
+Aim around 120–250ms for most UI transitions.
+
+Use spring behavior where appropriate.
+
+Animations must never stall generation or canvas input.
+
+Respect reduced-motion accessibility settings.
+
+---
+
+# 36. COMMAND PALETTE
+
+Add a command palette:
+
+```text
+Cmd/Ctrl+K
+```
+
+Search commands such as:
+
+```text
+Generate
+Switch model
+Open project
+Install model
+Fit canvas
+Toggle mask
+Use seed
+Clear mask
+Upscale
+Open settings
+Open developer console
+```
+
+Make JForge keyboard-friendly.
+
+---
+
+# 37. KEYBOARD AND INPUT
+
+Implement professional shortcuts.
+
+At minimum:
+
+```text
+Cmd/Ctrl+Enter      Generate
+Escape              Cancel/close context
+Space-drag          Pan
+Cmd/Ctrl+0          Fit canvas
+Cmd/Ctrl+1          100%
+Cmd/Ctrl+Z          Undo
+Cmd/Ctrl+Shift+Z    Redo
+Cmd/Ctrl+S          Save project
+Cmd/Ctrl+Shift+S    Save As
+Delete              Delete selection
+B                   Brush
+E                   Eraser
+V                   Move/select
+```
+
+Support high-quality trackpad interactions on macOS.
+
+---
+
+# 38. PLATFORM INTEGRATION
+
+Maintain the same product language while respecting platform conventions.
+
+## macOS
+
+Use appropriate:
+
+- native menu bar;
+- title bar integration;
+- trackpad gestures;
+- Retina scaling;
+- system file dialogs where possible;
+- Apple Silicon acceleration;
+- optional material/translucent surfaces where feasible.
+
+## Windows
+
+Use appropriate:
+
+- modern titlebar integration;
+- high-DPI scaling;
+- Windows shortcuts;
+- DirectML/CUDA/OpenVINO;
+- modern window appearance.
+
+## Linux
+
+Support:
+
+- Wayland;
+- X11 fallback where needed;
+- GNOME/KDE environments;
+- fractional scaling;
+- NVIDIA/AMD/Intel;
+- desktop integration.
+
+Do not rely on blur/transparency to make the interface look good.
+
+---
+
+# 39. ACCESSIBILITY
+
+Implement:
+
+```text
+keyboard navigation
+focus indication
+screen-reader semantics
+sensible tab order
+high contrast
+reduced motion
+scalable UI
+tooltips
+non-color-only status indicators
+```
+
+Do not defer accessibility until the very end.
+
+---
+
+# 40. LORA TRAINING
+
+Implement local LoRA training as a proper workspace.
+
+Training configuration should support supported architectures and include, where technically appropriate:
+
+```text
+dataset folder
+captioning
+image preprocessing
+resolution
+batch size
+gradient accumulation
+learning rate
+optimizer
+epochs/steps
+checkpointing
+mixed precision
+validation prompts
+training preview
+resume
+export
+```
+
+Training must report:
+
+```text
+loss
+step
+epoch
+learning rate
+time
+device
+memory
+```
+
+Generated LoRAs should immediately become usable in JForge.
+
+---
+
+# 41. TRAINING RELIABILITY
+
+Training must:
+
+- resume after interruption;
+- save checkpoints safely;
+- validate dataset configuration;
+- reject unsupported model/backend combinations;
+- protect against accidental overwrite;
+- expose memory estimates before training.
+
+---
+
+# 42. SCRIPTING
+
+Implement scripting or automation support.
+
+Preferred options:
+
+- Java/Kotlin scripting;
+- JavaScript via a safe supported JVM runtime;
+- declarative workflow API.
+
+Expose controlled APIs for:
+
+```text
+generation
+canvas
+models
+metadata
+project operations
+export
+batch processing
+```
+
+Avoid giving untrusted scripts unrestricted filesystem/process access by default.
+
+---
+
+# 43. PLUGIN SDK
+
+Create a stable plugin API.
+
+Possible interfaces:
+
+```text
+PipelinePlugin
+ModelSourcePlugin
+ControlPlugin
+PreprocessorPlugin
+UpscalerPlugin
+PostProcessorPlugin
+ExportPlugin
+ToolPlugin
+MetadataPlugin
+```
+
+Version the API.
+
+Plugins should declare:
+
+```text
+ID
+version
+JForge API version
+capabilities
+permissions
+```
+
+Implement safe failure isolation.
+
+---
+
+# 44. WORKFLOW GRAPH
+
+Implement an internal serializable workflow graph.
+
+Nodes may include:
+
+```text
+Prompt
+Text Encoder
+Model
+LoRA
+Control
+Reference
+Sampler
+VAE
+Upscale
+Image Processor
+Export
+```
+
+Normal users do not need to see the graph.
+
+Advanced users should optionally be able to edit workflows.
+
+---
+
+# 45. COMFYUI INTEROPERABILITY
+
+Investigate and implement practical interoperability with ComfyUI workflows where semantics map safely and correctly.
+
+Possible features:
+
+```text
+import supported workflow subset
+export JForge workflow
+identify unsupported nodes
+map models
+map LoRAs
+map samplers
+map control inputs
+```
+
+Do not claim full ComfyUI compatibility if unsupported custom nodes prevent it.
+
+Report compatibility honestly.
+
+---
+
+# 46. HEADLESS CLI
+
+Implement a CLI using the same engine.
+
+Examples:
+
+```bash
+jforge model list
+
+jforge generate \
+  --model <id> \
+  --prompt "A photograph of Mumbai in monsoon" \
+  --width 1024 \
+  --height 1024 \
+  --steps 24 \
+  --seed 42
+
+jforge upscale input.png
+
+jforge serve
+```
+
+CLI commands must work without loading the desktop UI.
+
+---
+
+# 47. JAVA API
+
+Publish a clean embeddable Java API.
+
+Desired ergonomics:
+
+```java
+try (var forge = JForge.create()) {
+    var result = forge.generate(
+        GenerationRequest.builder()
+            .model("flux-example")
+            .prompt("A rainy Mumbai street at night")
+            .width(1024)
+            .height(1024)
+            .seed(42)
+            .build()
+    );
+
+    result.image().save(...);
+}
+```
+
+Do not expose Swing/Compose classes through the engine API.
+
+---
+
+# 48. SERVER MODE
+
+Implement headless server operation.
+
+Provide a versioned API.
+
+REST is required; optionally add gRPC.
+
+Support:
+
+```text
+model listing
+device listing
+generation
+generation status
+cancel
+upload source image
+retrieve output
+LoRA listing
+worker status
+```
+
+Protect server endpoints appropriately when exposed beyond localhost.
+
+---
+
+# 49. REMOTE WORKERS
+
+Implement JForge worker nodes.
+
+Example:
+
+```bash
+jforge worker --listen ...
+```
+
+Desktop should discover/configure workers.
+
+Display:
+
+```text
+device
+VRAM
+backend
+latency
+model availability
+busy state
+```
+
+Allow users to choose:
+
+```text
+Local
+Desktop RTX 3080
+Remote GPU server
+Auto
+```
+
+Do not silently send prompts/images to remote systems.
+
+Remote execution must be explicit and visible.
+
+---
+
+# 50. AUTO-SCHEDULING
+
+Eventually choose execution target based on:
+
+```text
+model
+available VRAM
+estimated memory
+device speed
+worker availability
+network cost
+user preference
+```
+
+Always allow manual override.
+
+---
+
+# 51. VIDEO GENERATION
+
+Extend the architecture beyond images.
+
+Support modern open-weight video architectures where technically and legally feasible.
+
+Target workflows:
+
+```text
+text → video
+image → video
+video → video
+first-frame conditioning
+last-frame conditioning
+reference conditioning
+```
+
+Support:
+
+```text
+preview
+frame count
+FPS
+resolution
+seed
+steps
+duration
+export
+```
+
+---
+
+# 52. VIDEO WORKSPACE
+
+Add a lightweight timeline when video functionality becomes available.
+
+Do not force video into the image-filmstrip UI.
+
+Provide:
+
+```text
+scrubbing
+play/pause
+frame preview
+generation status
+compare variants
+export
+```
+
+---
+
+# 53. VIDEO ENCODING
+
+Use reliable native/media tooling where appropriate.
+
+Support useful output codecs such as:
+
+```text
+H.264
+HEVC
+AV1 where available
+```
+
+Preserve metadata.
+
+---
+
+# 54. UPSCALING / RESTORATION
+
+Keep Real-ESRGAN support but improve the subsystem.
+
+Support:
+
+```text
+tile-based upscale
+large images
+before/after comparison
+multiple upscalers
+face restoration where appropriately licensed
+denoise/sharpen options
+memory-aware processing
+```
+
+Upscaling should operate directly from canvas selections/history.
+
+---
+
+# 55. PROJECT PERSISTENCE
+
+Users must be able to save and reopen work.
+
+Persist:
+
+```text
+canvas
+layers
+generation history
+prompts
+model references
+LoRAs
+controls
+references
+document settings
+```
+
+Handle missing models gracefully when opening a project.
+
+---
+
+# 56. CRASH RECOVERY
+
+Autosave recovery state.
+
+On abnormal exit, offer restoration.
+
+Generation metadata/history should not disappear because the application crashed.
+
+---
+
+# 57. OUTPUT METADATA
+
+Embed generation metadata into exported images where the file format permits.
+
+Allow users to inspect and copy metadata later.
+
+Support importing settings from JForge-generated files.
+
+---
+
+# 58. PERFORMANCE TELEMETRY — LOCAL ONLY
+
+Provide local performance metrics:
+
+```text
+load time
+first generation latency
+steps/sec
+peak VRAM
+peak RAM
+VAE decode time
+model switching time
+```
+
+No external telemetry unless explicitly opt-in.
+
+JForge is local-first.
+
+---
+
+# 59. BENCHMARK MODE
+
+Create:
+
+```bash
+jforge benchmark
+```
+
+Benchmark representative workloads.
+
+Generate local reports comparing:
+
+```text
+backend
+device
+model
+resolution
+precision
+quantization
+steps/sec
+peak memory
+```
+
+Use benchmarks to drive automatic recommendations.
+
+---
+
+# 60. HARDWARE QUALITY MATRIX
+
+Maintain verified results for:
+
+## NVIDIA
+
+Representative:
+
+```text
+RTX 20
+RTX 30
+RTX 40
+RTX 50 where available
+```
+
+## AMD
+
+Representative supported RDNA generations where CI/hardware is available.
+
+## Intel
+
+Representative Arc hardware.
+
+## Apple
+
+Representative M-series generations available to testing.
+
+If physical hardware is unavailable:
+
+- use CI/cloud/community validation where possible;
+- label support "unverified" rather than pretending.
+
+---
+
+# 61. TESTING STRATEGY
+
+Substantially expand automated tests.
+
+Required categories:
+
+```text
+unit
+integration
+golden inference
+model parser
+scheduler
+tokenizer
+storage
+download
+checksum
+UI state
+project persistence
+CLI
+server API
+plugin API
+workflow serialization
+backend capability
+failure recovery
+```
+
+---
+
+# 62. GOLDEN INFERENCE TESTS
+
+For each supported major model architecture maintain test fixtures recording:
+
+```text
+prompt
+negative prompt
+seed
+steps
+scheduler
+CFG
+resolution
+model hash
+expected output characteristics
+```
+
+Where exact pixel equality is not realistic across backends, use appropriately tolerant comparisons such as:
+
+```text
+perceptual similarity
+tensor tolerances
+structural checks
+```
+
+Still validate determinism on the same supported backend configuration where feasible.
+
+---
+
+# 63. REAL MODEL SMOKE TESTS
+
+CI must include small real inference smoke tests when practical.
+
+Do not make every CI run download tens of gigabytes.
+
+Use:
+
+- tiny test models;
+- mocked layers where appropriate;
+- scheduled heavier validation;
+- release-time hardware tests.
+
+---
+
+# 64. UI VISUAL QA
+
+For all major UI milestones:
+
+1. build the app;
+2. run it;
+3. capture screenshots;
+4. inspect screenshots;
+5. compare against the design goals;
+6. fix clipping, poor spacing, weak hierarchy, bad typography, broken states, overflow and inconsistent styling;
+7. repeat.
+
+Do not mark UI work complete based solely on compilation.
+
+Test at multiple window sizes and scaling levels.
+
+---
+
+# 65. UI INTERACTION QA
+
+Test:
+
+```text
+mouse
+keyboard
+trackpad
+window resize
+full screen
+HiDPI
+dark mode
+light mode if supported
+multi-monitor
+drag/drop
+undo/redo
+generation cancellation
+model download cancellation
+```
+
+---
+
+# 66. PERFORMANCE QA
+
+Measure:
+
+```text
+startup time
+idle RAM
+canvas FPS
+zoom latency
+large-image canvas performance
+generation progress responsiveness
+model-switch time
+model-manager scrolling
+history with hundreds/thousands of entries
+```
+
+Target 60 FPS UI interactions on ordinary supported hardware.
+
+Inference must never freeze the UI thread.
+
+---
+
+# 67. FAILURE HANDLING
+
+Explicitly test:
+
+```text
+missing model
+corrupt model
+unsupported model
+bad tokenizer
+missing VAE
+OOM
+GPU driver problem
+provider initialization failure
+disk full
+download interruption
+network interruption
+permission failure
+invalid project
+remote worker disconnect
+cancel during generation
+cancel during download
+cancel during training
+```
+
+Errors must be understandable and actionable.
+
+No stack traces dumped into the normal user interface.
+
+---
+
+# 68. PACKAGING
+
+Produce real desktop packages.
+
+Target:
+
+```text
+Windows installer/package
+macOS .app / distributable image
+Linux AppImage and/or appropriate native packages
+```
+
+Use `jpackage` or another appropriate JVM packaging solution.
+
+Users should not need to manually install Maven.
+
+Where feasible, bundle the required JVM runtime.
+
+---
+
+# 69. CODE SIGNING / RELEASE
+
+Prepare infrastructure for:
+
+```text
+macOS signing/notarization
+Windows signing
+checksums
+SBOM
+release notes
+versioning
+update metadata
+```
+
+If signing credentials are unavailable, automate everything except the secret-dependent signing operation and document it honestly.
+
+---
+
+# 70. AUTO-UPDATE
+
+Implement a secure update mechanism or clearly structured update path.
+
+Do not execute arbitrary unsigned binaries downloaded from the internet.
+
+---
+
+# 71. SECURITY
+
+Audit:
+
+```text
+model downloads
+archive extraction
+plugin loading
+script execution
+remote server
+remote worker
+path traversal
+malformed model metadata
+unsafe deserialization
+temporary files
+token storage
+```
+
+Store Hugging Face/API credentials securely where platform facilities permit.
+
+Never print secrets into logs.
+
+---
+
+# 72. PRIVACY
+
+Default behavior:
+
+```text
+local inference
+local history
+local prompts
+local projects
+```
+
+No cloud upload without explicit user action.
+
+Remote-worker execution must clearly identify where the data is being sent.
+
+---
+
+# 73. REMOVE OR REPLACE LEGACY UI
+
+Once the new UI reaches feature parity, remove obsolete Swing screens rather than retaining two conflicting application shells indefinitely.
+
+Candidates include the old:
+
+```text
+MainFrame
+TextToImagePanel
+ImageUpscalePanel
+Output/History/Library/Log layout
+card navigation architecture
+```
+
+Do not delete legacy functionality until its replacement is proven.
+
+---
+
+# 74. CODE QUALITY
+
+Enforce:
+
+- small focused classes;
+- clear interfaces;
+- immutable configuration objects where practical;
+- explicit ownership/lifetimes;
+- no giant utility classes;
+- no duplicated model logic;
+- no arbitrary magic model-name checks;
+- no swallowed exceptions without justification;
+- no uncontrolled global mutable state;
+- no UI-thread inference;
+- no placeholder production code.
+
+---
+
+# 75. OBSERVABILITY
+
+Use structured logging.
+
+Log useful identifiers:
+
+```text
+generation ID
+model ID
+backend
+device
+phase
+duration
+memory
+```
+
+Separate:
+
+```text
+user-facing status
+developer diagnostics
+```
+
+---
+
+# 76. DOCUMENTATION
+
+Document:
+
+```text
+architecture
+model integration
+backend API
+pipeline API
+plugin API
+workflow format
+CLI
+server
+building
+testing
+packaging
+benchmarking
+supported hardware
+supported models
+known limitations
+```
+
+Prefer concise useful documentation over speculative prose.
+
+---
+
+# 77. MIGRATION ORDER
+
+Implement in approximately this order.
+
+## M0 — ENGINE CORRECTNESS — target 30/100
+
+- truthful audit;
+- typed generation request;
+- fix batch/steps semantics;
+- pipeline abstraction;
+- scheduler abstraction;
+- backend abstraction;
+- split GenericOnnxService;
+- deterministic seeds;
+- golden inference tests;
+- proper error handling.
+
+Exit gate:
+
+Existing supported generation/upscale functionality works at least as reliably as before, with better tests.
+
+---
+
+## M1 — NEW PRODUCT SHELL — target 40/100
+
+- JVM-native modern UI;
+- design system;
+- new workspace;
+- inspector;
+- command palette;
+- generation filmstrip;
+- proper model browser;
+- live generation status;
+- developer console.
+
+Exit gate:
+
+No major workflow requires the old Swing UI.
+
+---
+
+## M2 — MODERN MODEL ENGINE — target 52/100
+
+- model bundles;
+- safetensors;
+- Diffusers ingestion;
+- representative modern model architectures;
+- capability-driven UI;
+- memory-aware execution;
+- improved device detection.
+
+Exit gate:
+
+Several materially different modern architectures generate validated images.
+
+---
+
+## M3 — CREATIVE CANVAS — target 65/100
+
+- infinite canvas;
+- project model;
+- layers;
+- undo/redo;
+- img2img;
+- masks;
+- inpainting;
+- outpainting;
+- before/after;
+- drag/drop.
+
+Exit gate:
+
+JForge feels like a creative application rather than a prompt form.
+
+---
+
+## M4 — CONDITIONING — target 75/100
+
+- LoRA;
+- multiple LoRAs;
+- ControlNet;
+- control preprocessors;
+- reference conditioning;
+- external VAEs;
+- textual inversion where supported.
+
+Exit gate:
+
+Power-user image workflows are competitive with mature local-generation tools.
+
+---
+
+## M5 — PERFORMANCE & TRAINING — target 84/100
+
+- quantization;
+- memory modes;
+- hardware benchmarking;
+- LoRA training;
+- checkpoint/resume;
+- specialized backend optimizations where profiling supports them.
+
+---
+
+## M6 — PLATFORM — target 90/100
+
+- CLI;
+- Java API;
+- REST server;
+- remote workers;
+- plugin API;
+- scripting;
+- workflow serialization;
+- practical ComfyUI interoperability.
+
+---
+
+## M7 — MEDIA — target 95/100
+
+- video generation;
+- image→video;
+- video preview/timeline;
+- encoding/export;
+- improved restoration/upscale.
+
+---
+
+## M8 — PRODUCTION — target 100/100
+
+- installers;
+- runtime bundling;
+- crash recovery;
+- migration/version compatibility;
+- accessibility;
+- localization architecture;
+- extensive visual QA;
+- hardware validation;
+- security audit;
+- performance audit;
+- packaging;
+- signed-release preparation;
+- documentation;
+- zero known P0/P1 product defects.
+
+---
+
+# 78. VISUAL QUALITY BAR
+
+The final application must NOT look like:
+
+- default Swing;
+- default JavaFX;
+- an admin dashboard;
+- a settings dialog;
+- an ONNX demonstration program;
+- a collection of forms;
+- a student project;
+- a generic AI wrapper.
+
+It should visually communicate:
+
+```text
+professional
+dense
+fast
+technical
+creative
+modern
+native-like
+premium
+```
+
+Use screenshots from high-quality desktop creative tools only as design references, never by copying proprietary assets.
+
+---
+
+# 79. USER EXPERIENCE QUALITY BAR
+
+A first-time user should be able to:
+
+```text
+launch JForge
+→ discover/install a suitable model
+→ type a prompt
+→ generate an image
+→ see progress
+→ create variations
+→ edit/mask/outpaint
+→ export
+```
+
+without needing to:
+
+```text
+read logs
+understand ONNX
+install Maven
+manually move model components
+understand tensor shapes
+know execution-provider names
+```
+
+Advanced users should still have control over all relevant parameters.
+
+---
+
+# 80. MODEL EXPERIENCE QUALITY BAR
+
+Model installation should answer:
+
+```text
+Will this run on my hardware?
+How much memory does it need?
+How large is the download?
+What does it do?
+What license is it under?
+What quantization should I use?
+```
+
+before installation.
+
+---
+
+# 81. PERFORMANCE QUALITY BAR
+
+No artificial performance claims.
+
+Measure actual values.
+
+For every important workload track:
+
+```text
+cold model load
+warm model load
+generation time
+iterations/sec
+peak VRAM
+peak RAM
+canvas responsiveness
+```
+
+Use results to detect regressions.
+
+---
+
+# 82. STRICT NO-FAKE-FEATURE POLICY
+
+The following do NOT count as implementation:
+
+- disabled button;
+- TODO;
+- placeholder panel;
+- empty interface;
+- fake generation;
+- fake progress;
+- hard-coded demo output;
+- tests containing no real assertions;
+- documentation claiming planned features;
+- UI control not connected to inference;
+- model listed but not executable;
+- "supported" backend never tested.
+
+TRUTH.md must distinguish:
+
+```text
+implemented
+tested
+verified
+experimental
+unverified
+planned
+blocked
+```
+
+---
+
+# 83. DO NOT BREAK WORKING FEATURES
+
+Before major refactors, establish tests for existing working functionality.
+
+Migrate incrementally.
+
+Do not replace working inference with architecture diagrams.
+
+---
+
+# 84. BUILD CONTINUOUSLY
+
+At every substantial tranche:
+
+```bash
+mvn test
+```
+
+and whatever Gradle/Maven commands are introduced.
+
+Run appropriate packaging/build jobs.
+
+Fix failures immediately.
+
+Do not stack hundreds of changes on top of a broken build.
+
+---
+
+# 85. CI
+
+GitHub Actions must validate:
+
+```text
+Linux
+Windows
+macOS
+```
+
+At minimum:
+
+```text
+compile
+unit tests
+integration tests where practical
+package
+static checks
+```
+
+Add scheduled heavier model/backend tests where practical.
+
+---
+
+# 86. RELEASE GATES
+
+A release candidate cannot be declared production-ready unless:
+
+```text
+all required builds pass
+all unit tests pass
+all integration tests pass
+golden inference suite passes
+UI visual QA passes
+major workflows manually smoke-tested
+no P0 defects
+no known P1 defects
+install packages produced
+fresh-machine installation tested
+documentation matches reality
+TRUTH.md ≥ 98/100
+```
+
+100/100 additionally requires closure of remaining production-quality gaps.
+
+---
+
+# 87. CONTINUE UNTIL COMPLETE
+
+Do not stop after:
+
+- writing AGENTS.md;
+- designing architecture;
+- implementing M0;
+- creating a pretty UI;
+- adding a canvas shell;
+- creating APIs;
+- adding model names;
+- reaching compilation.
+
+Continue implementing milestone after milestone.
+
+When context becomes constrained:
+
+1. update TRUTH.md;
+2. commit a coherent working checkpoint;
+3. continue from the remaining highest-priority gap.
+
+The repository itself must preserve enough state for another coding agent to continue without needing conversation history.
+
+---
+
+# 88. SELF-AUDIT AFTER EVERY MAJOR MILESTONE
+
+After each milestone:
+
+1. rebuild;
+2. rerun tests;
+3. run representative real workflows;
+4. inspect UI screenshots;
+5. inspect generated output;
+6. measure performance;
+7. inspect regression risks;
+8. update TRUTH.md;
+9. assign an evidence-backed score.
+
+Never increase scores merely because code volume increased.
+
+---
+
+# 89. FINAL PRODUCT TEST
+
+Before claiming 100/100, perform this end-to-end scenario from a clean user environment:
+
+```text
+Install JForge
+Launch
+Detect GPU
+Browse compatible models
+Install model
+Generate image
+Generate batch
+Repeat seed
+Create variation
+Drag image to canvas
+Perform img2img
+Paint mask
+Inpaint
+Extend canvas
+Outpaint
+Apply LoRA
+Apply Control
+Upscale
+Save project
+Close
+Reopen project
+Export image
+Inspect metadata
+Run equivalent generation through CLI
+Run equivalent generation through Java API
+Start server
+Generate through server
+Connect remote worker if test environment permits
+Train a small LoRA where supported
+Use resulting LoRA
+Generate/preview video where supported
+```
+
+Everything must behave coherently.
+
+---
+
+# 90. FINAL DEFINITION OF JFORGE
+
+The completed product should be credibly describable as:
+
+> **JForge is an open-source, MIT-licensed, local-first generative media workstation and JVM inference platform. It provides professional image generation and editing, an infinite creative canvas, modern diffusion/transformer models, LoRA and conditioning workflows, hardware-accelerated inference across NVIDIA, AMD, Intel and Apple systems, local training, reproducible workflows, CLI/server operation, remote GPU workers, plugins, and cross-platform desktop applications for macOS, Windows and Linux.**
+
+The Java/JVM ecosystem should be a strength, not a limitation.
+
+---
+
+# 91. DIFFERENTIATORS OVER DRAW THINGS
+
+Parity alone is not the end goal.
+
+Once parity-critical capabilities are implemented, prioritize these advantages:
+
+### A. True desktop cross-platform parity
+
+```text
+macOS
+Windows
+Linux
+```
+
+### B. Broad GPU support
+
+```text
+Apple
+NVIDIA
+AMD
+Intel
+CPU fallback
+```
+
+### C. JVM-native SDK
+
+Allow JForge to function as a library inside other Java applications.
+
+### D. Headless deployment
+
+CLI + REST + optional gRPC.
+
+### E. Local GPU federation
+
+Use spare machines as JForge workers.
+
+### F. Plugin ecosystem
+
+Allow model/backend/control/tool extensions.
+
+### G. Workflow portability
+
+Serializable reusable pipelines.
+
+### H. ComfyUI interoperability
+
+Use existing workflow ecosystems where practical.
+
+### I. Benchmark-guided hardware selection
+
+Automatically select the best local/remote execution target.
+
+### J. Production-grade testing
+
+Treat model correctness and hardware performance as products, not anecdotes.
+
+---
+
+# 92. ENGINEERING PHILOSOPHY
+
+Whenever choosing between:
+
+```text
+quick hack
+```
+
+and
+
+```text
+architecture that safely supports the next 20 model families
+```
+
+prefer the latter without falling into speculative overengineering.
+
+Whenever choosing between:
+
+```text
+feature checkbox
+```
+
+and
+
+```text
+complete usable workflow
+```
+
+choose the workflow.
+
+Whenever choosing between:
+
+```text
+visual polish
+```
+
+and
+
+```text
+functionality
+```
+
+implement both.
+
+This product succeeds only if the engine is technically strong **and** the application is pleasant enough that normal people want to use it.
+
+---
+
+# 93. BEGIN NOW
+
+Start by:
+
+1. cloning/updating the repository;
+2. establishing the build/run baseline;
+3. auditing every subsystem;
+4. creating/updating AGENTS.md and TRUTH.md;
+5. assigning the truthful initial score;
+6. fixing correctness defects;
+7. beginning the inference architecture decomposition;
+8. beginning the new product UI architecture;
+9. adding regression tests before destructive refactors;
+10. continuing through all milestones until the repository reaches the highest honestly defensible production-readiness score.
+
+Do not return only a plan.
+
+**Modify the repository. Build it. Run it. Test it. Visually inspect it. Benchmark it. Fix it. Repeat until JForge is a real production-quality generative media workstation.**

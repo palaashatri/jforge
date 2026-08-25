@@ -2,34 +2,36 @@
 
 [![Build JForge](https://github.com/palaashatri/jforge/actions/workflows/build.yml/badge.svg)](https://github.com/palaashatri/jforge/actions/workflows/build.yml)
 
-Desktop Java Swing application for ONNX Runtime inference with intelligent GPU acceleration across NVIDIA, Apple, Intel, and AMD hardware.
+A local-first, JVM-based generative-media workstation for Windows,
+macOS, and Linux. Runs Stable Diffusion family models and Real-ESRGAN
+upscaling through ONNX Runtime with automatic GPU execution-provider
+selection (CoreML, CUDA, TensorRT, DirectML, OpenVINO, ROCm).
 
-<img width="2302" height="1920" alt="image" src="https://github.com/user-attachments/assets/3d286f6d-2cc0-493c-996b-6c3f5c8da120" />
+> Status: **early engine milestone (M0) in progress.** See
+> [TRUTH.md](TRUTH.md) for the honest readiness ledger and
+> [AGENTS.md](AGENTS.md) for the end-state product contract. This README
+> describes what actually works today.
 
-> I don't know why it said "lultelpoop" but that's just stable diffusion on a weak chip I guess.
+## What works today
 
-
-## Features
-
-### Image Generation
+### Image generation
 - **Text → Image**: Stable Diffusion v1.5, SD Turbo, SDXL Turbo, SDXL Base 1.0, SD 3.5 (MMDiT)
-- **Image Enhancement**: Real-ESRGAN 4× super-resolution with before/after preview
-- **Prompt library**: saved presets, tags, and search
+- **Image upscaling**: Real-ESRGAN 4× super-resolution with before/after preview and tiled inference for large images
 - Negative prompts + prompt weighting
-- Seed control + reproducibility
+- Seed control (repeat a seed to reproduce an image on the same backend/config)
 - Batch generation (N images per prompt)
 - Aspect ratio presets + custom size fields
 - Style presets (cinematic, sketch, product, etc.)
 - History gallery with metadata (seed, model, settings)
 - Export pipeline logs for debugging
 
-### SD 3.5 Support
+### SD 3.5 support
 - MMDiT transformer architecture with Flow Matching Euler scheduler
 - Triple text encoding: CLIP-L (768d) + CLIP-G (1280d) + T5-XXL (4096d)
 - Built-in T5 tokenizer (SentencePiece/Unigram with Viterbi segmentation)
 - 16-channel latent space
 
-### Model Management
+### Model management
 - **Automatic HuggingFace discovery**: finds ONNX and PyTorch Stable Diffusion + ESRGAN models
 - **One-click download** with resume, retry, and stall detection
 - **PyTorch → ONNX auto-conversion**: downloading a PyTorch model triggers automatic conversion via managed Python venv
@@ -37,7 +39,7 @@ Desktop Java Swing application for ONNX Runtime inference with intelligent GPU a
 - Gated model support with HuggingFace token authentication
 - Local model storage in `~/.jforge-models`
 
-### GPU Acceleration
+### GPU acceleration
 Intelligent execution provider selection — JForge probes available EPs at runtime and picks the best one:
 
 | Platform | Priority (highest → lowest) |
@@ -50,9 +52,45 @@ Override with `-Djforge.ep=cuda` (or any EP key) to force a specific provider.
 
 ### UI
 - Native look-and-feel: system-native on macOS, FlatLaf with dark/light detection on Windows/Linux
-- High-performance async execution using virtual threads
+- Async generation using virtual threads (UI never blocks during inference)
 - Per-step progress with timing and ETA
 - Session and tokenizer caching for fast repeated inference
+
+### Headless CLI & embeddable Java API
+The same engine runs without any UI:
+
+```bash
+# list registered models
+java -jar jforge-universal.jar model list
+
+# generate (same flags as the desktop form)
+java -jar jforge-universal.jar generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
+
+# upscale an image
+java -jar jforge-universal.jar upscale --model realesrgan --image photo.png
+```
+
+Java applications can embed the engine directly — no Swing/UI classes on
+this path:
+
+```java
+try (JForge forge = JForge.create()) {
+    GenerationResult result = forge.generate(
+            GenerationRequest.builder()
+                    .model("sd_v15_onnx")
+                    .prompt("a cat")
+                    .steps(20)
+                    .build());
+    System.out.println(result.images().get(0).path());
+}
+```
+
+## Not yet built (honest list)
+The following are **planned** per [AGENTS.md](AGENTS.md) but do not exist
+yet: infinite canvas / layers, img2img, inpainting/outpainting, LoRA,
+ControlNet, training, video, REST server/worker, plugins, workflow graph,
+Compose desktop UI, installers, benchmark harness. Do not report these
+as working.
 
 ## Downloads
 
@@ -63,15 +101,14 @@ Pre-built fat JARs are available from [GitHub Releases](https://github.com/palaa
 | `jforge-universal.jar` | macOS CoreML (M-series GPU/ANE), CPU everywhere | macOS, or Windows/Linux without NVIDIA GPU |
 | `jforge-nvidia.jar` | CUDA + TensorRT (Windows/Linux) | Windows/Linux with NVIDIA GPU + CUDA installed |
 
-> **Note**: DirectML (AMD/Intel on Windows), OpenVINO (Intel), and ROCm (AMD on Linux) are auto-detected at runtime if the native libraries are installed on the system. The universal JAR handles this automatically.
+> **Note**: DirectML (AMD/Intel on Windows), OpenVINO (Intel), and ROCm (AMD on Linux) are auto-detected at runtime if the native libraries are installed on the system.
 
 ```bash
-# Run any variant
 java -jar jforge-universal.jar
 java -jar jforge-nvidia.jar
 ```
 
-## Build from Source
+## Build from source
 
 Requires **Java 21+** and **Maven 3.8+**.
 
@@ -95,14 +132,20 @@ mvn clean compile exec:java
 ### Run tests
 
 ```bash
-mvn clean test
+# CPU-only test run
+mvn -B test -Dort.artifactId=onnxruntime
 ```
+
+The suite (70 tests) covers the typed request API, scheduler math —
+including hand-computed golden values for every schedule and step
+formula — CLIP/T5 tokenizers against real fixtures, the legacy engine
+bridge, CLI argument parsing, and manifest round-tripping.
 
 ## CI / CD
 
-GitHub Actions builds both JAR variants on every push to `main` and PR. Pushing a version tag (e.g. `v1.0.0`) creates a GitHub Release with both JARs attached.
-
-See [.github/workflows/build.yml](.github/workflows/build.yml) for details.
+GitHub Actions runs `mvn test` plus both JAR builds on push/PR to
+`main` (see [.github/workflows/build.yml](.github/workflows/build.yml)).
+Packaged artifacts are uploaded; version tags create GitHub Releases.
 
 ## Requirements
 
@@ -113,7 +156,5 @@ See [.github/workflows/build.yml](.github/workflows/build.yml) for details.
 
 ## Notes
 
-- Runtime is pure Java — ONNX Runtime execution with GPU fallback. No Python bridge needed at inference time.
-- Override EP order via JVM property: `-Djforge.ep=cpu|coreml|cuda|tensorrt|directml|openvino|rocm`
-- Task tabs show preview images when output is generated, with **Open Output** to launch the file.
+- Runtime inference is pure Java — ONNX Runtime with GPU fallback. No Python bridge at inference time.
 - If a model requires external tensor files (e.g. `weights.pb`), import the complete ONNX bundle into the model directory.
