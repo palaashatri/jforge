@@ -6,6 +6,14 @@ import atri.palaash.jforge.model.ModelRegistry;
 import atri.palaash.jforge.model.TaskType;
 import atri.palaash.jforge.storage.ModelDownloader;
 import atri.palaash.jforge.storage.ModelStorage;
+import atri.palaash.jforge.ui.console.DeveloperConsole;
+import atri.palaash.jforge.ui.palette.CommandPalette;
+import atri.palaash.jforge.ui.workspace.CanvasPanel;
+import atri.palaash.jforge.ui.workspace.FilmstripPanel;
+import atri.palaash.jforge.ui.workspace.InspectorPanel;
+import atri.palaash.jforge.ui.workspace.ToolRail;
+import atri.palaash.jforge.ui.workspace.WorkspaceShell;
+import atri.palaash.jforge.ui.design.DesignTokens;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -63,6 +71,11 @@ public class MainFrame extends JFrame {
     private ImageUpscalePanel imageUpscalePanel;
     private ModelManagerPanel modelManagerPanel;
 
+    /* Workspace shell (M1) */
+    private WorkspaceShell workspaceShell;
+    private DeveloperConsole developerConsole;
+    private boolean devConsoleVisible = false;
+
     /* Factory state for lazy construction */
     private final ModelRegistry registry;
     private final ModelStorage storage;
@@ -117,7 +130,7 @@ public class MainFrame extends JFrame {
         contentPanel.add(new JPanel(), CARD_UPSCALE);
         contentPanel.add(new JPanel(), CARD_MODELS);
 
-        /* ── Sidebar ─────────────────────────────────────────────── */
+        /* ── Sidebar (legacy navigation, now hosted inside workspace) ─── */
         String[] workflowItems = {CARD_GENERATE, CARD_UPSCALE};
         workflowList = new JList<>(workflowItems);
         workflowList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -136,80 +149,64 @@ public class MainFrame extends JFrame {
             if (!e.getValueIsAdjusting() && workflowList.getSelectedIndex() >= 0) {
                 managementList.clearSelection();
                 switchToCard(workflowList.getSelectedValue(), workflowList, workflowList.getSelectedIndex());
+                syncInspectorToCard(workflowList.getSelectedValue());
             }
         });
         managementList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting() && managementList.getSelectedIndex() >= 0) {
                 workflowList.clearSelection();
                 switchToCard(managementList.getSelectedValue(), managementList, managementList.getSelectedIndex());
+                syncInspectorToCard(managementList.getSelectedValue());
             }
         });
 
         workflowList.setSelectedIndex(0);
 
-        JPanel sidebarPanel = new JPanel(new BorderLayout(0, 0));
-        sidebarPanel.setPreferredSize(new Dimension(170, 0));
-        sidebarPanel.setBorder(new SeparatorBorder());
-
-        JLabel brand = new JLabel("JForge");
-        brand.setFont(brand.getFont().deriveFont(Font.BOLD, 13f));
-        brand.setBorder(BorderFactory.createEmptyBorder(14, 20, 12, 20));
-        sidebarPanel.add(brand, BorderLayout.NORTH);
-
-        JPanel workflowSection = new JPanel();
-        workflowSection.setLayout(new BoxLayout(workflowSection, BoxLayout.Y_AXIS));
-        workflowSection.setOpaque(false);
-        workflowSection.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
-
-        JLabel workflowHeader = new JLabel("WORKSPACE");
-        workflowHeader.setFont(workflowHeader.getFont().deriveFont(Font.BOLD, 10f));
-        workflowHeader.setForeground(UIManager.getColor("Label.disabledForeground"));
-        workflowHeader.setBorder(BorderFactory.createEmptyBorder(4, 20, 4, 20));
-        workflowHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-        workflowSection.add(workflowHeader);
-        workflowList.setAlignmentX(Component.LEFT_ALIGNMENT);
-        workflowSection.add(workflowList);
-
-        JPanel managementSection = new JPanel();
-        managementSection.setLayout(new BoxLayout(managementSection, BoxLayout.Y_AXIS));
-        managementSection.setOpaque(false);
-
-        JLabel managementHeader = new JLabel("MANAGEMENT");
-        managementHeader.setFont(managementHeader.getFont().deriveFont(Font.BOLD, 10f));
-        managementHeader.setForeground(UIManager.getColor("Label.disabledForeground"));
-        managementHeader.setBorder(BorderFactory.createEmptyBorder(8, 20, 4, 20));
-        managementHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
-        managementSection.add(managementHeader);
-        managementList.setAlignmentX(Component.LEFT_ALIGNMENT);
-        managementSection.add(managementList);
-
-        JPanel bottomSection = new JPanel();
-        bottomSection.setLayout(new BoxLayout(bottomSection, BoxLayout.Y_AXIS));
-        bottomSection.setOpaque(false);
-        bottomSection.setBorder(BorderFactory.createEmptyBorder(0, 0, 12, 0));
-        bottomSection.add(managementSection);
-
-        JPanel sidebarContent = new JPanel(new BorderLayout());
-        sidebarContent.setOpaque(false);
-        sidebarContent.add(workflowSection, BorderLayout.NORTH);
-        sidebarContent.add(bottomSection, BorderLayout.SOUTH);
-
-        sidebarPanel.add(sidebarContent, BorderLayout.CENTER);
-
-        /* ── Status bar ──────────────────────────────────────────── */
+        /* ── Status bar (created before workspace so lambda can capture it) ─ */
         statusBarLabel = new JLabel(detectEpInfo());
-        statusBarLabel.setFont(statusBarLabel.getFont().deriveFont(Font.PLAIN, 11f));
-        statusBarLabel.setForeground(UIManager.getColor("Label.disabledForeground"));
+        statusBarLabel.setFont(DesignTokens.fontCaption());
+        statusBarLabel.setForeground(DesignTokens.fgMuted());
         statusBarLabel.setBorder(BorderFactory.createCompoundBorder(
                 new SeparatorBorder(true),
                 BorderFactory.createEmptyBorder(4, 16, 4, 16)));
 
-        /* ── Root assembly ───────────────────────────────────────── */
+        JPanel legacySidebar = buildLegacySidebar();
+
+        /* ── Workspace shell (M1) ─────────────────────────────────── */
+        workspaceShell = new WorkspaceShell(tool -> {
+            if (tool == ToolRail.Tool.SELECT) statusBarLabel.setText("Tool: Select — " + detectEpInfo());
+            else statusBarLabel.setText("Tool: " + tool + " — " + detectEpInfo());
+        });
+
+        /* Host the card content in the workspace center */
+        workspaceShell.setCenterComponent(contentPanel);
+
+        /* Inspector: show legacy sidebar + contextual info */
+        JPanel inspectorContent = new JPanel(new BorderLayout(0, 8));
+        inspectorContent.setBackground(DesignTokens.bgSurface());
+        inspectorContent.add(legacySidebar, BorderLayout.NORTH);
+        JLabel inspHint = new JLabel("<html><body style='width:260px;color:#8A8A94;font-size:11px'>Inspector shows contextual controls for the selected tool and generation. Form rows will migrate here from giant cards.</body></html>");
+        inspHint.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+        inspectorContent.add(inspHint, BorderLayout.CENTER);
+        workspaceShell.setInspectorContent(inspectorContent);
+        workspaceShell.getFilmstrip().setInfo("History — generating shows here");
+
+        /* Developer console (hidden, toggled via View menu) */
+        developerConsole = new DeveloperConsole();
+        developerConsole.setVisible(false);
+        developerConsole.log("INFO", "JForge workspace initialized — EP: " + detectEpInfo());
+
+        /* ── Root assembly — workspace anatomy ────────────────────── */
         JPanel root = new JPanel(new BorderLayout());
-        root.add(sidebarPanel, BorderLayout.WEST);
-        root.add(contentPanel, BorderLayout.CENTER);
-        root.add(statusBarLabel, BorderLayout.SOUTH);
+        root.add(workspaceShell, BorderLayout.CENTER);
+        JPanel southStack = new JPanel(new BorderLayout());
+        southStack.add(statusBarLabel, BorderLayout.NORTH);
+        southStack.add(developerConsole, BorderLayout.CENTER);
+        root.add(southStack, BorderLayout.SOUTH);
         setContentPane(root);
+
+        CommandPalette.registerShortcut(getRootPane(), this::showCommandPalette);
+        syncInspectorToCard(CARD_GENERATE);
 
         /* ── Menu bar ────────────────────────────────────────────── */
         setJMenuBar(buildMenuBar());
@@ -348,6 +345,17 @@ public class MainFrame extends JFrame {
         showModels.addActionListener(e -> switchToCard(CARD_MODELS, managementList, 0));
         viewMenu.add(showModels);
 
+        viewMenu.addSeparator();
+        JMenuItem paletteItem = new JMenuItem("Command Palette…");
+        paletteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_K, menuMask));
+        paletteItem.addActionListener(e -> showCommandPalette());
+        viewMenu.add(paletteItem);
+
+        JCheckBoxMenuItem devConsoleItem = new JCheckBoxMenuItem("Developer Console");
+        devConsoleItem.setSelected(devConsoleVisible);
+        devConsoleItem.addActionListener(e -> toggleDeveloperConsole());
+        viewMenu.add(devConsoleItem);
+
         bar.add(viewMenu);
 
         /* Inference */
@@ -392,6 +400,89 @@ public class MainFrame extends JFrame {
         if (targetList != workflowList) workflowList.clearSelection();
         if (targetList != managementList) managementList.clearSelection();
         targetList.setSelectedIndex(index);
+    }
+
+    private JPanel buildLegacySidebar() {
+        JPanel sidebarPanel = new JPanel(new BorderLayout(0, 0));
+        sidebarPanel.setBackground(DesignTokens.bgSurface());
+        sidebarPanel.setPreferredSize(new Dimension(170, 0));
+        sidebarPanel.setBorder(new SeparatorBorder());
+
+        JLabel brand = new JLabel("JForge");
+        brand.setFont(DesignTokens.fontBodyBold().deriveFont(13f));
+        brand.setForeground(DesignTokens.fgPrimary());
+        brand.setBorder(BorderFactory.createEmptyBorder(14, 20, 12, 20));
+        sidebarPanel.add(brand, BorderLayout.NORTH);
+
+        JPanel workflowSection = new JPanel();
+        workflowSection.setLayout(new BoxLayout(workflowSection, BoxLayout.Y_AXIS));
+        workflowSection.setOpaque(false);
+        workflowSection.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+
+        JLabel workflowHeader = new JLabel("WORKSPACE");
+        workflowHeader.setFont(DesignTokens.fontTiny());
+        workflowHeader.setForeground(DesignTokens.fgMuted());
+        workflowHeader.setBorder(BorderFactory.createEmptyBorder(4, 20, 4, 20));
+        workflowHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        workflowSection.add(workflowHeader);
+        workflowList.setAlignmentX(Component.LEFT_ALIGNMENT);
+        workflowSection.add(workflowList);
+
+        JPanel managementSection = new JPanel();
+        managementSection.setLayout(new BoxLayout(managementSection, BoxLayout.Y_AXIS));
+        managementSection.setOpaque(false);
+
+        JLabel managementHeader = new JLabel("MANAGEMENT");
+        managementHeader.setFont(DesignTokens.fontTiny());
+        managementHeader.setForeground(DesignTokens.fgMuted());
+        managementHeader.setBorder(BorderFactory.createEmptyBorder(8, 20, 4, 20));
+        managementHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        managementSection.add(managementHeader);
+        managementList.setAlignmentX(Component.LEFT_ALIGNMENT);
+        managementSection.add(managementList);
+
+        JPanel bottomSection = new JPanel();
+        bottomSection.setLayout(new BoxLayout(bottomSection, BoxLayout.Y_AXIS));
+        bottomSection.setOpaque(false);
+        bottomSection.setBorder(BorderFactory.createEmptyBorder(0, 0, 12, 0));
+        bottomSection.add(managementSection);
+
+        JPanel sidebarContent = new JPanel(new BorderLayout());
+        sidebarContent.setOpaque(false);
+        sidebarContent.add(workflowSection, BorderLayout.NORTH);
+        sidebarContent.add(bottomSection, BorderLayout.SOUTH);
+
+        sidebarPanel.add(sidebarContent, BorderLayout.CENTER);
+        return sidebarPanel;
+    }
+
+    private void syncInspectorToCard(String card) {
+        if (workspaceShell == null) return;
+        workspaceShell.getInspector().setInspectorTitle(card);
+        workspaceShell.getFilmstrip().setInfo(card + "  ·  " + detectEpInfo());
+        if (developerConsole != null) developerConsole.log("INFO", "Navigated to " + card);
+    }
+
+    private void showCommandPalette() {
+        java.util.List<CommandPalette.Command> cmds = java.util.List.of(
+                new CommandPalette.Command("view.imagine", "Go to Imagine", "Text-to-image generation", () -> switchToCard(CARD_GENERATE, workflowList, 0)),
+                new CommandPalette.Command("view.enhance", "Go to Enhance", "Image upscaling", () -> switchToCard(CARD_UPSCALE, workflowList, 1)),
+                new CommandPalette.Command("view.models", "Go to Models", "Model manager", () -> switchToCard(CARD_MODELS, managementList, 0)),
+                new CommandPalette.Command("view.toggleDark", "Toggle Dark Mode", "Switch theme", () -> { NativeLookAndFeel.toggleDarkMode(); repaintAll(); }),
+                new CommandPalette.Command("view.devConsole", "Toggle Developer Console", "Show/hide logs", this::toggleDeveloperConsole),
+                new CommandPalette.Command("canvas.fit", "Fit Canvas", "Reset zoom and pan", () -> workspaceShell.getCanvas().fitToView()),
+                new CommandPalette.Command("canvas.zoomIn", "Zoom In", "Increase canvas zoom", () -> workspaceShell.getCanvas().setZoom(workspaceShell.getCanvas().getZoom()*1.2)),
+                new CommandPalette.Command("canvas.zoomOut", "Zoom Out", "Decrease canvas zoom", () -> workspaceShell.getCanvas().setZoom(workspaceShell.getCanvas().getZoom()*0.8))
+        );
+        CommandPalette p = new CommandPalette(this, cmds, id -> {});
+        p.setVisible(true);
+    }
+
+    private void toggleDeveloperConsole() {
+        devConsoleVisible = !devConsoleVisible;
+        developerConsole.setVisible(devConsoleVisible);
+        revalidate(); repaint();
+        developerConsole.log("INFO", devConsoleVisible ? "Developer console shown" : "Developer console hidden");
     }
 
     /* ================================================================== */

@@ -19,23 +19,23 @@ placeholder, or documentation does **not** count as implemented.
 
 ---
 
-## Current score (re-scored 2026-08-11 after first full `mvn test` on the M0 branch)
+## Current score (re-scored 2026-08-25 — M1 workspace tranche)
 
-**Total: 27 / 100**
+**Total: 33 / 100**
 
 | Category | Weight | Score | Notes |
 |---|---|---|---|
 | Inference architecture & correctness | 15 | 8 | God object split into per-architecture pipelines over shared engine components; typed request; batch/steps decoupled; deterministic seeds locked by test; scheduler math pinned by hand-computed golden values; first full `mvn test` is green (67 tests). Legacy adapter still advisory on scheduler + sequential batch |
 | Model-family coverage | 10 | 2 | SD 1.5 + SDXL + SD 3.x (converted); no FLUX/Qwen/Z-Image, no real model bundle abstraction |
 | Image generation quality/features | 10 | 4 | Real t2i works; no img2img, no real inpaint/outpaint engine support |
-| Canvas/editing/inpaint/outpaint | 10 | 0 | None — Swing form-centric UI only |
+| Canvas/editing/inpaint/outpaint | 10 | 1 | Placeholder infinite canvas with pan/zoom/checkerboard (CanvasPanel) inside new workspace shell; no document model/layers/undo yet |
 | LoRA/Control/reference conditioning | 10 | 0 | None |
 | GPU backends/performance/memory | 10 | 4 | ONNX Runtime EP probing real; CoreML `System.gc()` hack removed; still no benchmark harness or memory estimation |
-| UI/UX/product polish | 15 | 3 | FlatLaf Swing shell; not the target workspace |
+| UI/UX/product polish | 15 | 7 | DesignTokens (near-black dark neutrals, spacing/radii/type scale); WorkspaceShell (tool rail + canvas + inspector + filmstrip replaces card nav); Command Palette (Cmd/Ctrl+K); Developer Console (View menu); FlatLaf still, but workspace anatomy is now visible |
 | Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 3 | 71 unit/integration tests green locally (tokenizer, scheduler incl. golden values, API, engine, legacy adapter, CLI parsing); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 4 | 80 tests green locally (adds DesignTokens + WorkspaceShell unit tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -57,8 +57,9 @@ placeholder, or documentation does **not** count as implemented.
   `GenerationManifest.toRequest()` dropped the recorded backend/device so
   "recreate generation" could not reproduce the execution target). All
   fixed; the failing tests encode the intended contract and now pass.
+- 2026-08-25 M1 tranche: design system + workspace shell + command palette + dev console landed; UI/UX 3→7, canvas 0→1, QA 3→4, total 27→33 (first visible workspace anatomy; M1 target 40 not yet reached — inspector still hosts legacy sidebar, no document/layers/undo, no full design-system coverage, no Compose migration yet).
 - Score remains below the M0 target of 30 because M1 (product shell) is
-  untouched and inference accuracy itself is not yet model-level verified.
+  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1 has started, but M0's model-level golden verification is still pending.]
 
 ---
 
@@ -87,6 +88,23 @@ Blockers:
 - None technical. Engine is small enough to refactor incrementally.
 - CI is not auto-triggered for feature branches (workflow only runs on `main` push + PRs). The `milestone-m0-engine-correctness` branch is pushed; a PR to `main` is required to exercise the `test` job in CI.
 - Legacy adapter limitations (documented in `LegacyInferencePipeline`): legacy selects schedulers internally by model id so `request.scheduler()` is advisory; `batchSize > 1` runs as sequential derived-seed runs, not true batched inference.
+
+### M1 — Product shell (target 40)
+
+Progress:
+
+- [x] Design system foundation — `ui.design.DesignTokens` (near-black dark neutrals, spacing 4–32, radii 4–12, type scale 10–13pt, surface hierarchy, accent/success/warning/error, selection/hover states) + `ComponentStyles`; near-black neutrals, restrained separators, compact controls, high density
+- [x] Workspace anatomy — `ui.workspace.WorkspaceShell` (tool rail 48px + canvas + inspector 300px + filmstrip 112px) replaces the Imagine/Enhance/Models card navigation visually; `ToolRail`, `CanvasPanel` (checkerboard, pan via drag, zoom via wheel, fit/100%), `InspectorPanel` (section cards, scroll), `FilmstripPanel` (horizontal strip), `GenerationStatusBar`; MainFrame now assembles the workspace shell while preserving lazy card panels inside the center (no workflow breakage)
+- [x] Command palette — `ui.palette.CommandPalette` (Cmd/Ctrl+K, filterable list, keyboard navigation, 8 commands: view switches, dark mode, dev console, canvas fit/zoom)
+- [x] Developer console — `ui.console.DeveloperConsole` behind View → Developer Console (logs, backend/device/memory/model info, clear)
+- [x] Workspace unit tests — `DesignTokensTest` (scale monotonicity, dimensions, colors/fonts non-null), `WorkspaceShellTest` (shell regions, tool selection, zoom clamping, inspector/filmstrip content) — suite **80 tests, 0 failures**
+
+Blockers:
+
+- Inspector still hosts the legacy sidebar + placeholder sections; full migration of form rows (prompt, steps, CFG, seed) into inspector collapsing sections is next
+- Canvas is a placeholder checkerboard, not the infinite canvas with layers/document model/undo/tiles/selection/masks
+- No animation (120–250ms springs) yet; motion must respect reduced-motion
+- Compose Multiplatform migration not started — current shell is Swing/FlatLaf; acceptable per migration rule (package boundaries first), but the product contract requires Compose for the presentation layer — decision to stay on Swing for this tranche is documented here as incremental
 
 ---
 
@@ -134,14 +152,16 @@ Blockers:
 
 | Feature | Status | Evidence |
 |---|---|---|
-| Swing main frame | implemented | `MainFrame` |
-| Text-to-image form | implemented | `TextToImagePanel` |
+| Swing main frame | implemented | `MainFrame` (now workspace anatomy via `WorkspaceShell`) |
+| Design system | partial | `ui.design.DesignTokens` + `ComponentStyles` (near-black neutrals, spacing/radii/type, surface hierarchy) |
+| Workspace shell | partial | `ui.workspace.WorkspaceShell` + `ToolRail` + `CanvasPanel` + `InspectorPanel` + `FilmstripPanel` + `GenerationStatusBar` |
+| Text-to-image form | implemented | `TextToImagePanel` (still card-based; inspector migration pending) |
 | Upscale form | implemented | `ImageUpscalePanel` |
 | Model manager | implemented | `ModelManagerPanel` |
-| History gallery | implemented | `HistoryPanel` |
-| Infinite canvas / workspace | planned | none |
-| Command palette / inspector / filmstrip | planned | none |
-| Developer console | partial | logs in Log tab, not a dev console |
+| History gallery | implemented | `HistoryPanel` (filmstrip placeholder added) |
+| Infinite canvas | partial | `CanvasPanel` checkerboard with pan/zoom/fit; no layers/document/undo/tiles yet |
+| Command palette | implemented | `ui.palette.CommandPalette` (Cmd/Ctrl+K, View menu) |
+| Developer console | implemented | `ui.console.DeveloperConsole` (View → Developer Console, logs/backend/memory) |
 
 ### Platform
 
@@ -171,11 +191,13 @@ Blockers:
 | Unit — schedulers | implemented | `SchedulerMathTest`, `SchedulerTest`, `SchedulerGoldenTest` (hand-computed golden values) |
 | Unit — tokenizers | implemented | `ClipTokenizerTest`, `T5TokenizerTest` with fixture files |
 | Unit — API / engine | implemented | `GenerationRequestTest`, `PipelineCapabilitiesTest`, `GenerationManifestTest`, `LegacyInferencePipelineTest`, `LatentNoiseTest`, `RequestMapperTest` |
+| Unit — design/workspace | implemented | `DesignTokensTest` (5), `WorkspaceShellTest` (4) |
 | Golden inference | partial | tokenizer/scheduler-level golden values; full model-level golden outputs pending real model fixtures |
 | Integration | partial | `LegacyInferencePipelineTest` exercises the typed→legacy bridge with a stubbed `InferenceService` |
 | CI — Linux build | implemented | `.github/workflows/build.yml` (packaging uses `-DskipTests`) |
-| CI — Windows/macOS | planned | — |
-| CI — tests run | configured (not yet executed) | `test` job added; branch not yet CI-validated (workflow needs `main` push or PR) |
+| CI — Windows | implemented | `test-windows` job added (windows-latest, JDK 21) |
+| CI — macOS | planned | — |
+| CI — tests run | configured (not yet executed) | `test` + `test-windows` jobs added; branch not yet CI-validated (workflow needs `main` push or PR) |
 
 ---
 
