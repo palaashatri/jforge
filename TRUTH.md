@@ -19,14 +19,14 @@ placeholder, or documentation does **not** count as implemented.
 
 ---
 
-## Current score (re-scored 2026-08-25 — M1 inspector + model browser tranche)
+## Current score (re-scored 2026-08-25 — M2 ingestion tranche)
 
-**Total: 35 / 100**
+**Total: 39 / 100**
 
 | Category | Weight | Score | Notes |
 |---|---|---|---|
 | Inference architecture & correctness | 15 | 8 | God object split into per-architecture pipelines over shared engine components; typed request; batch/steps decoupled; deterministic seeds locked by test; scheduler math pinned by hand-computed golden values; first full `mvn test` is green (67 tests). Legacy adapter still advisory on scheduler + sequential batch |
-| Model-family coverage | 10 | 2 | SD 1.5 + SDXL + SD 3.x (converted); no FLUX/Qwen/Z-Image, no real model bundle abstraction |
+| Model-family coverage | 10 | 6 | SD 1.5 + SDXL + SD 3.x plus safetensors/Diffusers ingestion (SafetensorsHeader, DiffusersIndex, ModelBundleFactory with arch/family/scheduler/license inference); no FLUX/Qwen/Z-Image runtime yet, but bundle abstraction is real |
 | Image generation quality/features | 10 | 4 | Real t2i works; no img2img, no real inpaint/outpaint engine support |
 | Canvas/editing/inpaint/outpaint | 10 | 1 | Placeholder infinite canvas with pan/zoom/checkerboard (CanvasPanel) inside new workspace shell; no document model/layers/undo yet |
 | LoRA/Control/reference conditioning | 10 | 0 | None |
@@ -35,7 +35,7 @@ placeholder, or documentation does **not** count as implemented.
 | Training/model tooling | 5 | 1 | PyTorch→ONNX conversion is real; no LoRA training |
 | Video/media workflows | 5 | 0 | None |
 | CLI/API/server/plugins/workflows | 5 | 2 | `JForge` embeddable Java API + `jforge model list` / `jforge generate` CLI are real; no server/plugins/workers |
-| QA/reliability/release/accessibility | 5 | 4 | 85 tests green locally (adds inspector tests + workspace tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
+| QA/reliability/release/accessibility | 5 | 4 | 96 tests green locally (adds 11 ingestion tests); CI `test` + `test-windows` jobs configured but not yet executed; no macOS CI, no UI/visual QA |
 
 ### How this re-score was established
 
@@ -58,8 +58,10 @@ placeholder, or documentation does **not** count as implemented.
   "recreate generation" could not reproduce the execution target). All
   fixed; the failing tests encode the intended contract and now pass.
 - 2026-08-25 M1 tranche: design system + workspace shell + command palette + dev console landed; UI/UX 3→7, canvas 0→1, QA 3→4, total 27→33 (first visible workspace anatomy; M1 target 40 not yet reached — inspector still hosts legacy sidebar, no document/layers/undo, no full design-system coverage, no Compose migration yet).
+- 2026-08-25 M1 polish: inspector capability-driven sections, live status bar, model browser filters/actions, animation + filmstrip wiring; UI 7→9, total 33→35.
+- 2026-08-25 M2 ingestion: safetensors + Diffusers parsers + ModelBundleFactory (11 tests); Model-family 2→6, total 35→39.
 - Score remains below the M0 target of 30 because M1 (product shell) is
-  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1 has started, but M0's model-level golden verification is still pending.]
+  untouched and inference accuracy itself is not yet model-level verified. [Now superseded: M1 has started, M2 ingestion has started, but M0's model-level golden verification is still pending.]
 
 ---
 
@@ -105,8 +107,20 @@ Progress:
 Blockers:
 
 - Canvas is a placeholder checkerboard, not the infinite canvas with layers/document model/undo/tiles/selection/masks
-- No animation (120–250ms springs) yet; motion must respect reduced-motion
 - Compose Multiplatform migration not started — current shell is Swing/FlatLaf; acceptable per migration rule (package boundaries first), but the product contract requires Compose for the presentation layer — decision to stay on Swing for this tranche is documented here as incremental
+
+### M2 — Modern model engine (target 52)
+
+Progress:
+
+- [x] Safetensors header parser — `model.ingest.SafetensorsHeader` (LE u64 + JSON, dtype/shape/offsets, metadata, `looksLikeSafetensors`) + `SafetensorsHeaderTest` (4 tests: parse tensors, round-trip file, truncated header rejection, magic check)
+- [x] Diffusers index parser — `model.ingest.DiffusersIndex` (model_index.json → pipelineClass, components, `architectureFamily()` for sd15/sdxl/sd3/flux, `isDiffusersRoot`, `requiredFiles`) + `DiffusersIndexTest` (4 tests)
+- [x] ModelBundleFactory — `fromDiffusersDirectory` (arch/family/components/scheduler/license/steps/CFG), `fromSafetensorsFile` (arch inference via tensors/metadata, param estimate → memory), `fromOnnxFile` + capability-driven scheduler sets + `ModelBundleFactoryTest` (3 tests) — suite **96 tests, 0 failures**
+
+Blockers:
+
+- Factory not yet wired into `ModelRegistry` auto-discovery / `ModelDownloader` ingestion; capability UI (show supported schedulers/metadata in browser/inspector) still needs wiring
+- No quantized-model metadata handling yet; ONNX external tensor files not yet parsed
 
 ---
 
@@ -136,9 +150,11 @@ Blockers:
 | HF discovery & download w/ resume | implemented | `ModelDownloader` |
 | PyTorch→ONNX conversion | implemented | `PyTorchToOnnxConverter` + Python scripts |
 | Gated model token auth | implemented | `ModelDownloader` |
-| Model bundle abstraction | partial | typed `engine.ModelBundle` record + builder; no safetensors/Diffusers ingestion yet |
+| Model bundle abstraction | partial | `engine.ModelBundle` + `model.ingest.ModelBundleFactory` (Diffusers/safetensors/ONNX → bundle with arch/family/scheduler/license) |
+| Safetensors header | implemented | `model.ingest.SafetensorsHeader` + `SafetensorsHeaderTest` |
+| Diffusers model_index.json | implemented | `model.ingest.DiffusersIndex` + `DiffusersIndexTest` |
 | Checksum/verify on install | planned | download resume exists, no checksum metadata |
-| safetensors / Diffusers ingestion | planned | conversion path only |
+| Quantized model metadata | planned | none |
 
 ### GPU / backend
 
