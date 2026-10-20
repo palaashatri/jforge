@@ -10,9 +10,11 @@ import atri.palaash.jforge.storage.PyTorchToOnnxConverter;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
+import javax.swing.JTextField;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
@@ -125,7 +127,90 @@ public class ModelManagerPanel extends JPanel {
         rightActions.add(downloadButton);
         top.add(rightActions, BorderLayout.EAST);
 
-        add(top, BorderLayout.NORTH);
+        JPanel filterBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        filterBar.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+        filterBar.add(new JLabel("Filter:"));
+        String[] filters = {"All", "Image", "Edit", "Video", "Fast", "Low VRAM", "Installed"};
+        JComboBox<String> filterCombo = new JComboBox<>(filters);
+        filterCombo.setPreferredSize(new Dimension(140, 26));
+        JTextField searchField = new JTextField(14);
+        searchField.putClientProperty("JTextField.placeholderText", "Search models…");
+        JLabel countLabel = new JLabel(tableModel.getRowCount() + " models");
+        countLabel.setFont(countLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        filterBar.add(filterCombo);
+        filterBar.add(searchField);
+        filterBar.add(countLabel);
+        Runnable applyFilter = () -> {
+            String f = (String) filterCombo.getSelectedItem();
+            String q = searchField.getText().trim().toLowerCase();
+            tableModel.setFilter(descriptor -> {
+                boolean pass = switch (f) {
+                    case "Image" -> descriptor.taskType() == TaskType.TEXT_TO_IMAGE;
+                    case "Edit" -> descriptor.displayName().toLowerCase().contains("edit") || descriptor.id().toLowerCase().contains("edit");
+                    case "Video" -> descriptor.displayName().toLowerCase().contains("video");
+                    case "Fast" -> descriptor.displayName().toLowerCase().contains("turbo") || descriptor.displayName().toLowerCase().contains("fast") || descriptor.id().toLowerCase().contains("turbo");
+                    case "Low VRAM" -> descriptor.displayName().toLowerCase().contains("turbo") || descriptor.fileSizeBytes() > 0 && descriptor.fileSizeBytes() < 2_000_000_000L;
+                    case "Installed" -> modelStorage.isAvailable(descriptor);
+                    default -> true;
+                };
+                if (!q.isEmpty()) pass = pass && (descriptor.displayName().toLowerCase().contains(q) || descriptor.id().toLowerCase().contains(q));
+                return pass;
+            });
+            countLabel.setText(tableModel.getRowCount() + " models");
+        };
+        filterCombo.addActionListener(e -> applyFilter.run());
+        searchField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { applyFilter.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { applyFilter.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { applyFilter.run(); }
+        });
+
+        JPanel actionsBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        actionsBar.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0));
+        JButton useButton = new JButton("Use");
+        useButton.setToolTipText("Select this model for generation");
+        useButton.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row < 0) { statusLabel.setText("Select a model to use."); return; }
+            ModelDescriptor d = tableModel.modelAt(row);
+            if (!modelStorage.isAvailable(d)) { statusLabel.setText("Model not installed — download first."); return; }
+            statusLabel.setText("Selected: " + d.displayName() + " — ready to generate.");
+        });
+        JButton showFilesButton = new JButton("Show files");
+        showFilesButton.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row < 0) { statusLabel.setText("Select a model."); return; }
+            ModelDescriptor d = tableModel.modelAt(row);
+            Path p = modelStorage.modelPath(d).getParent();
+            try { if (p != null && Files.exists(p)) java.awt.Desktop.getDesktop().open(p.toFile()); else statusLabel.setText("No local files yet: " + p); } catch (Exception ex) { statusLabel.setText("Cannot open: " + ex.getMessage()); }
+        });
+        JButton verifyButton = new JButton("Verify");
+        verifyButton.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row < 0) { statusLabel.setText("Select a model."); return; }
+            ModelDescriptor d = tableModel.modelAt(row);
+            Path p = modelStorage.modelPath(d);
+            if (!Files.exists(p)) statusLabel.setText("Not installed — no file to verify.");
+            else try { long sz = Files.size(p); statusLabel.setText("Verified: " + p.getFileName() + " (" + (sz/1024/1024) + " MB)"); } catch (Exception ex) { statusLabel.setText("Verify failed: " + ex.getMessage()); }
+        });
+        JButton deleteButton = new JButton("Delete");
+        deleteButton.addActionListener(e -> {
+            int row = table.getSelectedRow();
+            if (row < 0) { statusLabel.setText("Select a model."); return; }
+            ModelDescriptor d = tableModel.modelAt(row);
+            int c = JOptionPane.showConfirmDialog(this, "Delete local files for " + d.displayName() + "?", "Confirm delete", JOptionPane.YES_NO_OPTION);
+            if (c == JOptionPane.YES_OPTION) {
+                try { Path p = modelStorage.modelPath(d); Files.deleteIfExists(p); tableModel.refreshAvailability(); statusLabel.setText("Deleted: " + d.displayName()); if (onModelsUpdated != null) onModelsUpdated.run(); } catch (Exception ex) { statusLabel.setText("Delete failed: " + ex.getMessage()); }
+            }
+        });
+        actionsBar.add(useButton); actionsBar.add(showFilesButton); actionsBar.add(verifyButton); actionsBar.add(deleteButton);
+
+        JPanel northStack = new JPanel(new BorderLayout(0, 0));
+        northStack.add(top, BorderLayout.NORTH);
+        northStack.add(filterBar, BorderLayout.CENTER);
+        northStack.add(actionsBar, BorderLayout.SOUTH);
+
+        add(northStack, BorderLayout.NORTH);
         add(tableScroll, BorderLayout.CENTER);
         JPanel bottom = new JPanel(new BorderLayout(8, 8));
         bottom.add(statusLabel, BorderLayout.CENTER);
@@ -459,9 +544,11 @@ public class ModelManagerPanel extends JPanel {
 
         private final String[] columns = {"Task", "Model", "Size", "Format", "Available", "Progress", "Source URL"};
         private final java.util.ArrayList<ModelDescriptor> rows;
+        private final java.util.ArrayList<ModelDescriptor> filteredRows = new java.util.ArrayList<>();
         private final ModelStorage storage;
         private final Map<String, Integer> progressById = new HashMap<>();
         private final Map<String, Boolean> availableById = new HashMap<>();
+        private java.util.function.Predicate<ModelDescriptor> filter = d -> true;
 
         /**
          * Constructs the table model with the given rows and storage backend.
@@ -473,6 +560,18 @@ public class ModelManagerPanel extends JPanel {
             this.rows = new java.util.ArrayList<>(rows);
             this.storage = storage;
             refreshAvailability();
+            applyFilter();
+        }
+
+        private void applyFilter() {
+            filteredRows.clear();
+            for (ModelDescriptor d : rows) if (filter.test(d)) filteredRows.add(d);
+            fireTableDataChanged();
+        }
+
+        void setFilter(java.util.function.Predicate<ModelDescriptor> predicate) {
+            this.filter = predicate != null ? predicate : d -> true;
+            applyFilter();
         }
 
         /**
@@ -484,6 +583,7 @@ public class ModelManagerPanel extends JPanel {
             rows.clear();
             rows.addAll(newRows);
             refreshAvailability();
+            applyFilter();
         }
 
         /**
@@ -493,7 +593,7 @@ public class ModelManagerPanel extends JPanel {
          * @return the model descriptor at that row
          */
         private ModelDescriptor modelAt(int row) {
-            return rows.get(row);
+            return filteredRows.get(row);
         }
 
         /**
@@ -516,7 +616,7 @@ public class ModelManagerPanel extends JPanel {
          * @param available whether the model is now available locally
          */
         private void setAvailable(int row, boolean available) {
-            ModelDescriptor descriptor = rows.get(row);
+            ModelDescriptor descriptor = filteredRows.get(row);
             availableById.put(descriptor.id(), available);
             fireTableRowsUpdated(row, row);
         }
@@ -540,7 +640,7 @@ public class ModelManagerPanel extends JPanel {
          */
         @Override
         public int getRowCount() {
-            return rows.size();
+            return filteredRows.size();
         }
 
         /**
@@ -574,7 +674,7 @@ public class ModelManagerPanel extends JPanel {
          */
         @Override
         public Object getValueAt(int rowIndex, int columnIndex) {
-            ModelDescriptor descriptor = rows.get(rowIndex);
+            ModelDescriptor descriptor = filteredRows.get(rowIndex);
             return switch (columnIndex) {
                 case 0 -> descriptor.taskType().displayName();
                 case 1 -> descriptor.displayName();
