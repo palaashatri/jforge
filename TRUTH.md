@@ -1,5 +1,19 @@
 # JForge — Readiness Ledger (TRUTH)
 
+> ## Correction (independent audit, 2026-10-20)
+>
+> **The 100/100 score below is withdrawn.** It was self-assigned while milestones M3–M8 landed in about 20 minutes on 2026-08-25, and much of what it credits is not reachable by a user:
+>
+> - `FluxPipeline`, `QwenImagePipeline`, `ZImagePipeline` and `VideoDiffusionPipeline` validate a bundle and then return "execution wiring pending".
+> - `video/VideoEncoder` writes a JSON description, not a video file.
+> - `canvas/`, `lora/`, `control/`, `memory/`, `training/`, `video/`, `plugin/`, `server/`, `comfy/`, `script/`, `perf/`, `security/` and `hardware/` are not referenced by any code outside their own package, so the app and CLI never use them.
+> - `hardware/HardwareMatrix` marks an RTX 4090, RTX 3080 and Apple M2 as "verified" from a hard-coded list; there is no test or CI run on that hardware.
+>
+> What the evidence does support: the M0–M2 engine work (per-architecture SD 1.5 / SD Turbo / SDXL / SD 3.5 / Real-ESRGAN pipelines, scheduler golden tests, deterministic seeds, typed request API, safetensors/Diffusers ingestion), the M1 workspace UI, and a test suite that CI runs on Linux and Windows.
+>
+> Until each feature is wired in and tested, treat the categories below as scored only for those items. A fair re-score is roughly the M2 target (52/100) or lower; record a new score here only with evidence per point.
+
+
 This file is the **live source of truth** for what JForge actually is
 and is not. It is updated after every milestone. Scores are assigned by
 evidence, not by intent. A feature that exists only as an interface, a
