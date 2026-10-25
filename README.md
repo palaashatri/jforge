@@ -173,3 +173,11 @@ Packaged artifacts are uploaded; version tags create GitHub Releases.
 
 - Runtime inference is pure Java — ONNX Runtime with GPU fallback. No Python bridge at inference time.
 - If a model requires external tensor files (e.g. `weights.pb`), import the complete ONNX bundle into the model directory.
+
+## Planned SLOPOS, PARAMA and edge-device support
+
+jforge is an original project considered for SLOPOS's **optional first-party catalog**, not required in its minimal image. Linux/SLOPOS GUI support must be demonstrated through real desktop integration; **PARAMA remains a conditional native source-port goal** after its actual process, graphics, files, ABI and toolkit dependencies exist. This is a platform roadmap, not a build/compatibility claim.
+
+**Raspberry Pi Zero 2 W efficiency:** Keep the model manager, gallery metadata and app UI lightweight and lazy, preflight Java heap + ONNX native/tensor allocations + model weights + GPU/CPU backend capacity before loading. Stable Diffusion/SDXL and 4× upscaling are **not assumed feasible** under 512 MB; show an explicit unsupported/local-resource explanation and permit user-approved remote/offloaded execution only behind a separate provider, never automatic upload. Avoid loading model lists/thumbnails/GPU EPs at idle and cancel cleanly on low memory.
+
+See [AGENTS.md](AGENTS.md#future-sloposparama-platforms-and-raspberry-pi-zero-2-w-efficiency) for measurable acceptance and restrictions. No actual Pi Zero 2 W or PARAMA acceptance has been performed.
