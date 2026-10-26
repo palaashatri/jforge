@@ -28,8 +28,12 @@ public final class JForgeCli {
     }
 
     public static void main(String[] args) {
-        int exit = new JForgeCli().run(args);
+        int exit = runCommand(args);
         System.exit(exit);
+    }
+
+    public static int runCommand(String[] args) {
+        return new JForgeCli().run(args);
     }
 
     int run(String[] args) {

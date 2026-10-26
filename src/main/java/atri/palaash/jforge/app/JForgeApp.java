@@ -1,5 +1,6 @@
 package atri.palaash.jforge.app;
 
+import atri.palaash.jforge.cli.JForgeCli;
 import atri.palaash.jforge.inference.InferenceService;
 import atri.palaash.jforge.inference.ServiceFactory;
 import atri.palaash.jforge.model.ModelRegistry;
@@ -32,6 +33,10 @@ public class JForgeApp {
      * @param args command-line arguments (unused)
      */
     public static void main(String[] args) {
+        if (shouldRunCli(args)) {
+            System.exit(JForgeCli.runCommand(args));
+            return;
+        }
         configureDesktopIntegration();
 
         System.out.println("[JForge] Starting \u2014 Java " + Runtime.version()
@@ -61,6 +66,10 @@ public class JForgeApp {
             MainFrame frame = new MainFrame(registry, storage, downloader, services);
             frame.setVisible(true);
         });
+    }
+
+    static boolean shouldRunCli(String[] args) {
+        return args != null && args.length > 0;
     }
 
     /**

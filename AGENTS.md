@@ -17,7 +17,6 @@ What exists only as unwired scaffolding — **no code outside its own package us
 - `TRUTH.md` reports 100/100; that score is withdrawn (see the correction at the top of `TRUTH.md`).
 
 Known bugs:
-- `java -jar jforge-*.jar <args>` always opens the GUI: the jar's main class is `app.JForgeApp`, which ignores arguments, so the CLI is reachable only with `java -cp <jar> atri.palaash.jforge.cli.JForgeCli …`.
 - The `gpu-linux` / `gpu-windows` Maven profiles auto-activate, so a plain `mvn package` on Linux or Windows builds the **GPU** variant. Pass `-Dort.artifactId=onnxruntime` for the CPU build.
 
 ## Commands
@@ -29,7 +28,7 @@ mvn -B test -Dort.artifactId=onnxruntime                    # what CI runs
 mvn clean compile exec:java                                  # run the desktop app from source
 mvn clean package -DskipTests -Dort.artifactId=onnxruntime   # CPU (+ CoreML on macOS) fat jar
 mvn clean package -DskipTests -Dort.artifactId=onnxruntime_gpu -Djar.classifier=-nvidia   # CUDA/TensorRT fat jar
-java -cp target/jforge-*.jar atri.palaash.jforge.cli.JForgeCli model list   # headless CLI
+java -jar target/jforge-*.jar model list   # headless CLI via jar entry point
 ```
 
 Force an execution provider with `-Djforge.ep=cpu|coreml|cuda|tensorrt|directml|openvino|rocm`.

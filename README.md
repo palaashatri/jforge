@@ -62,14 +62,13 @@ The same engine runs without any UI:
 
 ```bash
 # list registered models
-# (use -cp + the CLI class: `java -jar` always opens the desktop app)
-java -cp jforge-universal.jar atri.palaash.jforge.cli.JForgeCli model list
+java -jar jforge-universal.jar model list
 
 # generate (same flags as the desktop form)
-java -cp jforge-universal.jar atri.palaash.jforge.cli.JForgeCli generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
+java -jar jforge-universal.jar generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
 
 # upscale an image
-java -cp jforge-universal.jar atri.palaash.jforge.cli.JForgeCli upscale --model realesrgan --image photo.png
+java -jar jforge-universal.jar upscale --model realesrgan --image photo.png
 ```
 
 Java applications can embed the engine directly — no Swing/UI classes on
@@ -98,13 +97,12 @@ as working.
 
 In priority order — each item is something a user would notice:
 
-1. **Make the CLI reachable from the jar**: dispatch to `JForgeCli` in `JForgeApp.main` when arguments are given, so `java -jar jforge.jar generate …` works as documented.
-2. **Image-to-image and inpainting in the workspace**: the request API already accepts an input image; wire it to the canvas with a mask brush.
-3. **LoRA support end to end**: apply `LoRAStack` weights in the SD 1.5/SDXL pipelines, with a picker in the inspector.
-4. **FLUX.1 schnell** as the first modern model family, wired to the existing pipeline SPI with a golden-image test.
-5. **Generation queue with cancel and a history you can re-run** (manifest round-tripping already exists).
-6. **Installers**: `jpackage` builds for macOS, Windows and Linux so users don't need a JDK.
-7. **Delete or finish the remaining scaffolding** (`video/`, `training/`, `plugin/`, `comfy/`, `server/`) so the codebase only contains features that work.
+1. **Image-to-image and inpainting in the workspace**: the request API already accepts an input image; wire it to the canvas with a mask brush.
+2. **LoRA support end to end**: apply `LoRAStack` weights in the SD 1.5/SDXL pipelines, with a picker in the inspector.
+3. **FLUX.1 schnell** as the first modern model family, wired to the existing pipeline SPI with a golden-image test.
+4. **Generation queue with cancel and a history you can re-run** (manifest round-tripping already exists).
+5. **Installers**: `jpackage` builds for macOS, Windows and Linux so users don't need a JDK.
+6. **Delete or finish the remaining scaffolding** (`video/`, `training/`, `plugin/`, `comfy/`, `server/`) so the codebase only contains features that work.
 
 ## Downloads
 

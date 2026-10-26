@@ -12,6 +12,8 @@
 > What the evidence does support: the M0–M2 engine work (per-architecture SD 1.5 / SD Turbo / SDXL / SD 3.5 / Real-ESRGAN pipelines, scheduler golden tests, deterministic seeds, typed request API, safetensors/Diffusers ingestion), the M1 workspace UI, and a test suite that CI runs on Linux and Windows.
 >
 > Until each feature is wired in and tested, treat the categories below as scored only for those items. A fair re-score is roughly the M2 target (52/100) or lower; record a new score here only with evidence per point.
+>
+> 2026-10-26 evidence update: `app.JForgeApp` now dispatches non-empty `java -jar jforge-*.jar <args>` invocations to `cli.JForgeCli` (headless path) instead of always opening Swing; see `src/main/java/atri/palaash/jforge/app/JForgeApp.java` and `src/test/java/atri/palaash/jforge/app/JForgeAppTest.java`.
 
 
 This file is the **live source of truth** for what JForge actually is
