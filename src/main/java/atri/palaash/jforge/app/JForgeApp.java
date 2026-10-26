@@ -32,6 +32,11 @@ public class JForgeApp {
      * @param args command-line arguments (unused)
      */
     public static void main(String[] args) {
+        // Support CLI when arguments are provided
+        if (args.length > 0) {
+            atri.palaash.jforge.cli.JForgeCli.main(args);
+            return;
+        }
         configureDesktopIntegration();
 
         System.out.println("[JForge] Starting \u2014 Java " + Runtime.version()
