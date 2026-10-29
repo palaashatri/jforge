@@ -1,3 +1,3 @@
-# JFORGE brand asset family
+# JForge visual identity
 
-Original coordinated vector identity for Java AI workbench. Includes full-color application icon, monochrome mark, horizontal wordmark, 1200×630 social preview, and palette tokens. All assets are source SVGs and scale losslessly. Export standard raster sizes with Inkscape or any SVG renderer. Existing application resources are untouched pending visual review.
+Original warm amber ceramic tile with sculpted Java `J` and steam. Includes source-size transparent PNG and 16–1024px resampled PNGs, ICO, ICNS, wordmark and social banner. These replace rejected flat line SVGs. Large icon exports were upscaled from ~248px generated contact-sheet crops; they are not independently generated 1024px masters. Keep draft until UI, build and launcher-size QA are complete.
