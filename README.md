@@ -1,5 +1,10 @@
 # JForge
 
+<img src="assets/brand/app-icon.svg" alt="JForge icon" width="96" align="right" />
+
+[Icon, wordmark, and brand assets](assets/brand/README.md)
+
+
 [![Build JForge](https://github.com/palaashatri/jforge/actions/workflows/build.yml/badge.svg)](https://github.com/palaashatri/jforge/actions/workflows/build.yml)
 
 A local-first, JVM-based generative-media workstation for Windows,

@@ -1,0 +1,13 @@
+{
+  "name": "JForge",
+  "category": "Generative image workstation",
+  "background": [
+    "#4c425a",
+    "#282637"
+  ],
+  "accent": "#c3abc5",
+  "highlight": "#f1dce5",
+  "typography": "Inter, Segoe UI, Arial",
+  "style": "muted-metal / enamel / soft-depth",
+  "license": "original project artwork"
+}
