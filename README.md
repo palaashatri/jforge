@@ -63,13 +63,13 @@ The same engine runs without any UI:
 ```bash
 # list registered models
 # (use -cp + the CLI class: `java -jar` always opens the desktop app)
-java -cp jforge-universal.jar atri.palaash.jforge.cli.JForgeCli model list
+java -jar jforge-universal.jar   # or with args for CLIJForgeCli model list
 
 # generate (same flags as the desktop form)
-java -cp jforge-universal.jar atri.palaash.jforge.cli.JForgeCli generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
+java -jar jforge-universal.jar   # or with args for CLIJForgeCli generate --model sd_v15_onnx --prompt "a cat" --steps 20 --seed 42 --width 512 --height 512
 
 # upscale an image
-java -cp jforge-universal.jar atri.palaash.jforge.cli.JForgeCli upscale --model realesrgan --image photo.png
+java -jar jforge-universal.jar   # or with args for CLIJForgeCli upscale --model realesrgan --image photo.png
 ```
 
 Java applications can embed the engine directly — no Swing/UI classes on

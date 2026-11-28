@@ -17,7 +17,7 @@ What exists only as unwired scaffolding — **no code outside its own package us
 - `TRUTH.md` reports 100/100; that score is withdrawn (see the correction at the top of `TRUTH.md`).
 
 Known bugs:
-- `java -jar jforge-*.jar <args>` always opens the GUI: the jar's main class is `app.JForgeApp`, which ignores arguments, so the CLI is reachable only with `java -cp <jar> atri.palaash.jforge.cli.JForgeCli …`.
+- `java -jar jforge-*.jar <args>` now dispatches to the CLI when arguments are provided (JForgeApp.main checks args and calls JForgeCli.main). Without args it still opens the GUI.
 - The `gpu-linux` / `gpu-windows` Maven profiles auto-activate, so a plain `mvn package` on Linux or Windows builds the **GPU** variant. Pass `-Dort.artifactId=onnxruntime` for the CPU build.
 
 ## Commands
